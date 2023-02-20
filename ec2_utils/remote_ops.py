@@ -1,6 +1,7 @@
 import os
 from typing import Dict, List, Optional, Tuple, Union
 import subprocess
+import time
 
 
 class RemoteHost:
@@ -96,3 +97,14 @@ class RemoteHost:
 
     def list_dir(self, path: str) -> List[str]:
         return self.check_output(["ls", "-1", path]).split("\n")
+
+def wait_for_connection(addr, port, timeout=15, attempt_cnt=5):
+    import socket
+    for i in range(attempt_cnt):
+        try:
+            with socket.create_connection((addr, port), timeout=timeout):
+                return
+        except (ConnectionRefusedError, socket.timeout):
+            if i == attempt_cnt - 1:
+                raise
+            time.sleep(timeout)
