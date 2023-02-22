@@ -41,11 +41,16 @@ class RemoteHost:
                               f"{self.login_name}@{self.addr}:{remote_file}", local_file])
 
     def start_docker(self, image="quay.io/pypa/manylinux2014_aarch64:latest") -> None:
-        self.run_ssh_cmd("sudo apt-get install -y docker.io")
-        self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
-        self.run_ssh_cmd("sudo service docker start")
-        self.run_ssh_cmd(f"docker pull {image}")
-        self.container_id = self.check_ssh_output(f"docker run -t -d -w /root {image}").strip()
+        try:
+            self.run_ssh_cmd("sudo apt-get install -y docker.io")
+            self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
+            self.run_ssh_cmd("sudo service docker start")
+            self.run_ssh_cmd(f"docker pull {image}")
+            self.container_id = self.check_ssh_output(f"docker run -t -d -w /root {image}").strip()
+        except Exception as x:
+            print(x)
+            return False
+        return True
 
     def using_docker(self) -> bool:
         return self.container_id is not None
