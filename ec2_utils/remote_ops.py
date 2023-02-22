@@ -41,11 +41,16 @@ class RemoteHost:
                               f"{self.login_name}@{self.addr}:{remote_file}", local_file])
 
     def start_docker(self, image="quay.io/pypa/manylinux2014_aarch64:latest") -> None:
-        self.run_ssh_cmd("sudo apt-get install -y docker.io")
-        self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
-        self.run_ssh_cmd("sudo service docker start")
-        self.run_ssh_cmd(f"docker pull {image}")
-        self.container_id = self.check_ssh_output(f"docker run -t -d -w /root {image}").strip()
+        try:
+            self.run_ssh_cmd("sudo apt-get install -y docker.io")
+            self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
+            self.run_ssh_cmd("sudo service docker start")
+            self.run_ssh_cmd(f"docker pull {image}")
+            self.container_id = self.check_ssh_output(f"docker run -t -d -w /root {image}").strip()
+        except Exception as x:
+            print(x)
+            return False
+        return True
 
     def using_docker(self) -> bool:
         return self.container_id is not None
@@ -54,9 +59,9 @@ class RemoteHost:
         if not self.using_docker():
             return self.run_ssh_cmd(args)
         assert self.container_id is not None
-        docker_cmd = self._gen_ssh_prefix() + ['docker', 'exec', '-i', self.container_id, 'bash']
+        docker_cmd = self._gen_ssh_prefix() + ['docker', 'exec', '-i', self.container_id, 'bash -i ']
         p = subprocess.Popen(docker_cmd, stdin=subprocess.PIPE)
-        p.communicate(input=" ".join(["source .bashrc;"] + self._split_cmd(args)).encode("utf-8"))
+        p.communicate(input=" ".join(["source ~/.bashrc;"] + self._split_cmd(args)).encode("utf-8"))
         rc = p.wait()
         if rc != 0:
             raise subprocess.CalledProcessError(rc, docker_cmd)
@@ -65,9 +70,9 @@ class RemoteHost:
         if not self.using_docker():
             return self.check_ssh_output(args)
         assert self.container_id is not None
-        docker_cmd = self._gen_ssh_prefix() + ['docker', 'exec', '-i', self.container_id, 'bash']
+        docker_cmd = self._gen_ssh_prefix() + ['docker', 'exec', '-i', self.container_id, 'bash -i ']
         p = subprocess.Popen(docker_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        (out, err) = p.communicate(input=" ".join(["source .bashrc;"] + self._split_cmd(args)).encode("utf-8"))
+        (out, err) = p.communicate(input=" ".join(["source ~/.bashrc;"] + self._split_cmd(args)).encode("utf-8"))
         rc = p.wait()
         if rc != 0:
             raise subprocess.CalledProcessError(rc, docker_cmd, output=out, stderr=err)
