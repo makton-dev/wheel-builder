@@ -2,6 +2,7 @@ import os
 from typing import Dict, List, Optional, Tuple, Union
 import subprocess
 import time
+from . import ec2_ops
 
 
 class RemoteHost:
@@ -10,6 +11,9 @@ class RemoteHost:
     login_name: str
     container_id: Optional[str] = None
     ami: Optional[str] = None
+    sg_id: str = None
+    instance = None
+
 
     def __init__(self, addr: str, keyfile_path: str, login_name: str = 'ubuntu'):
         self.addr = addr
@@ -40,20 +44,41 @@ class RemoteHost:
         subprocess.check_call(["scp", "-i", self.keyfile_path,
                               f"{self.login_name}@{self.addr}:{remote_file}", local_file])
 
-    def start_docker(self, image="quay.io/pypa/manylinux2014_aarch64:latest") -> None:
+    def start_docker(self, 
+                    image: str = None, 
+                    enable_cuda: bool = False) -> None:
+        print("Installing Docker for Builds...")
         try:
             self.run_ssh_cmd("sudo apt-get install -y docker.io")
             self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
             self.run_ssh_cmd("sudo service docker start")
+            
+            if enable_cuda:
+                print("Configuring Docker for nVidia GPU usage..")
+                self.run_ssh_cmd("distribution=$(. /etc/os-release;echo $ID$VERSION_ID) " \
+                            "&& curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | " \
+                            "sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg " \
+                            "&& curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | "\
+                            "sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | "\
+                            "sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list")
+                self.run_ssh_cmd("sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit")
+                self.run_ssh_cmd("sudo nvidia-ctk runtime configure --runtime=docker")
+                self.run_ssh_cmd("sudo systemctl restart docker")
+                cmd_str = f"docker run -t -d --gpus all -w /root {image}"
+            else:
+                cmd_str = f"docker run -t -d -w /root {image}"
+
             self.run_ssh_cmd(f"docker pull {image}")
-            self.container_id = self.check_ssh_output(f"docker run -t -d -w /root {image}").strip()
+            self.container_id = self.check_ssh_output(cmd_str).strip()
         except Exception as x:
+            print("failed to start docker container")
             print(x)
-            return False
-        return True
+            ec2_ops.cleanup(self.instance, self.sg_id)
+            exit(1)
 
     def using_docker(self) -> bool:
         return self.container_id is not None
+
 
     def run_cmd(self, args: Union[str, List[str]]) -> None:
         if not self.using_docker():
@@ -63,8 +88,15 @@ class RemoteHost:
         p = subprocess.Popen(docker_cmd, stdin=subprocess.PIPE)
         p.communicate(input=" ".join(["source ~/.bashrc;"] + self._split_cmd(args)).encode("utf-8"))
         rc = p.wait()
-        if rc != 0:
-            raise subprocess.CalledProcessError(rc, docker_cmd)
+        try:
+            if rc != 0:
+                raise subprocess.CalledProcessError(rc, docker_cmd)
+        except subprocess.CalledProcessError as x:
+            print("Command Execution Failed...")
+            print(docker_cmd)
+            ec2_ops.cleanup(self.instance, self.sg_id)
+            exit(1)
+
 
     def check_output(self, args: Union[str, List[str]]) -> str:
         if not self.using_docker():
@@ -96,8 +128,7 @@ class RemoteHost:
 
     def download_wheel(self, remote_file: str, local_file: Optional[str] = None) -> None:
         if self.using_docker() and local_file is None:
-            basename = os.path.basename(remote_file)
-            local_file = basename.replace("-linux_aarch64.whl", "-manylinux2014_aarch64.whl")
+            local_file = os.path.basename(remote_file)
         self.download_file(remote_file, local_file)
 
     def list_dir(self, path: str) -> List[str]:
