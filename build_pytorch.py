@@ -84,6 +84,7 @@ def prep_host(host: remote):
     except Exception as x:
         print("Failed to prepare host..")
         print(x)
+        if host.keep_instance: exit(1)
         ec2.cleanup(host.instance, host.sg_id)
         exit(1)
     time.sleep(3)
@@ -120,6 +121,7 @@ def configure_docker(host: remote):
         host.run_cmd("cmake --version")
     except Exception as x:
         print(x)
+        if host.keep_instance: exit(1)
         ec2.cleanup(host.instance, host.sg_id)
         exit(1)
     print("Docker container ready to build")
@@ -149,15 +151,9 @@ def build_OpenBLAS(host: remote, git_flags: str = "") -> None:
     Currently used with arm64 builds
     '''
     print('Building OpenBLAS for ARM64')
-    try:
-     host.run_cmd(f"git clone https://github.com/xianyi/OpenBLAS -b v{OPENBLAS_VERSION} {git_flags}")
-     
-     make_flags = "NUM_THREADS=64 USE_OPENMP=1 NO_SHARED=1 DYNAMIC_ARCH=1 TARGET=ARMV8"
-     host.run_cmd(f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS")
-    except Exception as x:
-        print(x)
-        ec2.cleanup(host.instance, host.sg_id)
-        exit(1)
+    host.run_cmd(f"git clone https://github.com/xianyi/OpenBLAS -b v{OPENBLAS_VERSION} {git_flags}") 
+    make_flags = "NUM_THREADS=64 USE_OPENMP=1 NO_SHARED=1 DYNAMIC_ARCH=1 TARGET=ARMV8"
+    host.run_cmd(f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS")
     print("OpenBlas built")
 
 
@@ -166,10 +162,9 @@ def build_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
     It's in the name. Used for arm64 builds
     '''
     print('Build and install ARM Compute Library')
-    try:
-        host.run_cmd("mkdir $HOME/acl")
-        host.run_cmd(f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v22.11 {git_clone_flags}")
-        host.run_cmd(f"pushd ComputeLibrary; " \
+    host.run_cmd("mkdir $HOME/acl")
+    host.run_cmd(f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v22.11 {git_clone_flags}")
+    host.run_cmd(f"pushd ComputeLibrary; " \
                     f"git fetch https://review.mlplatform.org/ml/ComputeLibrary && git cherry-pick --no-commit d2475c721e; " \
                     f"git fetch https://review.mlplatform.org/ml/ComputeLibrary refs/changes/68/9068/4 && git cherry-pick --no-commit FETCH_HEAD; " \
                     f"export acl_install_dir=$HOME/acl; " \
@@ -179,10 +174,6 @@ def build_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
                     f"cp -r utils $acl_install_dir; " \
                     f"cp -r support $acl_install_dir; " \
                     f"popd")
-    except Exception as x:
-        print(x)
-        ec2.cleanup(host.instance, host.sg_id)
-        exit(1)
     print("ARM Compute Library Installed")
 
 
@@ -405,6 +396,7 @@ def parse_arguments():
     parser.add_argument("--enable-mkldnn", action="store_true")
     parser.add_argument("--enable-cuda", action="store_true")
     parser.add_argument("--cuda-version", choices=['11.1', '11.2', '11.3', '11.4', '11.5', '11.6','11.7','11.8','12.0'])
+    parser.add_argument("--keep-instance-on-failure", action="store_true")
     return parser.parse_args()
 
 
@@ -445,6 +437,7 @@ if __name__ == '__main__':
                             keyfile_path=ec2.KEY_PATH)
     host.instance = instance
     host.sg_id = sg_id
+    host.keep_instance = args.keep_instance_on_failure
 
     prep_host(host)
     host.start_docker(image, enable_cuda)

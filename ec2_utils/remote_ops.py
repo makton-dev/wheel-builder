@@ -13,6 +13,7 @@ class RemoteHost:
     ami: Optional[str] = None
     sg_id: str = None
     instance = None
+    keep_instance: bool = False
 
 
     def __init__(self, addr: str, keyfile_path: str, login_name: str = 'ubuntu'):
@@ -94,6 +95,7 @@ class RemoteHost:
         except subprocess.CalledProcessError as x:
             print("Command Execution Failed...")
             print(docker_cmd)
+            if self.keep_instance: exit(1)
             ec2_ops.cleanup(self.instance, self.sg_id)
             exit(1)
 
