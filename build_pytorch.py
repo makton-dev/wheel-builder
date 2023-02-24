@@ -122,7 +122,7 @@ def configure_docker(host: remote):
     host.run_cmd(f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/{suffix}")
     host.run_cmd("bash -f ~/miniforge.sh -b")
     host.run_cmd("rm -f ~/miniforge.sh")
-    host.run_cmd("echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc")
+    host.run_cmd("echo 'PATH=$HOME/miniforge3/bin:/home/.openmpi/bin:$PATH' >> ~/.bashrc")
     host.run_cmd(f"$HOME/miniforge3/bin/conda install -y python={python_version} numpy pyyaml ninja scons auditwheel patchelf make cmake")
     install_OpenMPI(host) # OpenMPI is used on all wheels
     preset_lib_vars(host)
@@ -166,11 +166,12 @@ def preset_lib_vars(host: remote):
         host.run_cmd("echo 'export LD_LIBRARY_PATH=" \
                      "$HOME/acl/build:" \
                      "$HOME/pytorch/build/lib:" \
-                     "$HOME/.openmpi/lib/' >> ~/.bashrc")
+                     "/opt/OpenBLAS/lib/:" \
+                     "home/.openmpi/lib' >> ~/.bashrc")
     else:
         host.run_cmd("echo 'export LD_LIBRARY_PATH=" \
                      "$HOME/pytorch/build/lib:" \
-                     "$HOME/.openmpi/lib/' >> ~/.bashrc")
+                     "home/.openmpi/lib' >> ~/.bashrc")
 
 
 def install_OpenBLAS(host: remote, git_flags: str = "") -> None:
