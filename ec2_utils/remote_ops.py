@@ -14,6 +14,7 @@ class RemoteHost:
     sg_id: str = None
     instance = None
     keep_instance: bool = False
+    wheel_dir: str = None
 
 
     def __init__(self, addr: str, keyfile_path: str, login_name: str = 'ubuntu'):
@@ -40,10 +41,11 @@ class RemoteHost:
                               f"{self.login_name}@{self.addr}:{remote_file}"])
 
     def scp_download_file(self, remote_file: str, local_file: Optional[str] = None) -> None:
+        rel_path = self.wheel_dir+"/" if self.wheel_dir else ""
         if local_file is None:
             local_file = "."
         subprocess.check_call(["scp", "-i", self.keyfile_path,
-                              f"{self.login_name}@{self.addr}:{remote_file}", local_file])
+                              f"{self.login_name}@{self.addr}:{remote_file}", rel_path+local_file])
 
     def start_docker(self, 
                     image: str = None, 
