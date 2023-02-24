@@ -65,8 +65,6 @@ enable_cuda: bool = False
 cuda_version: str = None
 python_version: str = None
 pytorch_version: str = None
-processor = cuda_version.replace('.','') if enable_cuda else "cpu"
-arch = "aarch64" if is_arm64 else "x86_64"
 
 
 def prep_host(host: remote):
@@ -183,6 +181,7 @@ def build_torchvision(host: remote,
     '''
     Will build TorchVision for matching PyTorch version.
     '''
+    processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     print('Checking out TorchVision repo')
     build_version = checkout_repo(host,
                                     branch=branch,
@@ -209,6 +208,8 @@ def build_torchvision(host: remote,
 def build_torchaudio(host: remote,
                      branch: str = "master",
                      git_clone_flags: str = "") -> str:
+    arch = "aarch64" if is_arm64 else "x86_64"
+    processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     print('Checking out TorchAudio repo')
     git_clone_flags += " --recurse-submodules"
     build_version = checkout_repo(host,
@@ -236,6 +237,8 @@ def build_torchaudio(host: remote,
 def build_torchtext(host: remote,
                     branch: str = "master",
                     git_clone_flags: str = "") -> str:
+    arch = "aarch64" if is_arm64 else "x86_64"
+    processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     print('Checking out TorchText repo')
     git_clone_flags += " --recurse-submodules "
     build_version = checkout_repo(host,
@@ -263,6 +266,7 @@ def build_torchtext(host: remote,
 def build_torchdata(host: remote,
                      branch: str = "master",
                      git_clone_flags: str = "") -> str:
+    processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     print('Checking out TorchData repo')
     git_clone_flags += " --recurse-submodules"
     build_version = checkout_repo(host,
@@ -300,6 +304,7 @@ def complete_wheel(host: remote, folder: str, env_str: str = ""):
 
 
 def build_wheels(host:remote):
+    processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     git_flags = " --depth 1 --shallow-submodules"
     torch_wheel_name = None
@@ -431,7 +436,6 @@ if __name__ == '__main__':
     instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
     addr = instance.public_dns_name
 
-    print()
     remote.wait_for_connection(addr, 22)
     host = remote.RemoteHost(addr=addr, 
                             keyfile_path=ec2.KEY_PATH)
@@ -446,5 +450,3 @@ if __name__ == '__main__':
     
     print(f"Terminating instance and cleaning up")
     ec2.cleanup(instance, sg_id)
-    exit(0)
- 
