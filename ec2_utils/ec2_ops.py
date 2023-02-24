@@ -7,10 +7,10 @@ current_resource = resource("ec2")
 current_client = client("ec2")
 current_region = session.Session().region_name
 
-KEY_NAME = "WHEEL-BUILDER-" + str(datetime.now())
+KEY_NAME = "WHEEL_BUILDER-" + str(datetime.now())
 KEY_FOLDER = os.environ.get('HOME') + "/.ssh/"
 KEY_PATH = KEY_FOLDER + KEY_NAME
-SG_NAME = "builder_sg-" + str(datetime.now())
+SG_NAME = "BUILDER_SG-" + str(datetime.now())
 
 
 def get_ami_id(ami_pattern = None):

@@ -5,6 +5,9 @@ from ec2_utils import ec2_ops as ec2, remote_ops as remote
 
 OPENBLAS_VERSION = "0.3.21"
 NVIDIA_DRIVER_VERSION = "470"
+OPEN_MPI_VERSION = "4.1.5"
+ARMCL_VERSION = "22.11"
+WHEEL_DIR = "wheels"
 
 ## Ancillary app version maps ##
 # these are used to properly map the ancillary app versions with the 
@@ -95,34 +98,45 @@ def configure_docker(host: remote):
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     '''
     suffix = None
+    cuda_mm = cuda_version.split('.')[0]+"-"+cuda_version.split('.')[1]
     
     print("Configure docker container")
-    try:
-        host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get update")
-        if is_arm64:
-            suffix = "latest/download/Miniforge3-Linux-aarch64.sh"
-            host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get install -y gcc-10 g++-10 libc6-dev libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config")
-            host.run_cmd("update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10")
-            host.run_cmd("update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100")
-        else:
-            suffix = "latest/download/Miniforge3-Linux-x86_64.sh"
-            host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config")
-            if enable_cuda:
-                host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y cuda-toolkit-{cuda_version.replace('.','-')} " \
-                    f"libcudnn8={CUDA_CUDNN_MAPPING[cuda_version]} " \
-                    f"libcudnn8-dev={CUDA_CUDNN_MAPPING[cuda_version]}")
-        host.run_cmd(f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/{suffix}")
-        host.run_cmd("bash -f ~/miniforge.sh -b")
-        host.run_cmd("rm -f ~/miniforge.sh")
-        host.run_cmd("echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc")
-        host.run_cmd(f"$HOME/miniforge3/bin/conda install -y python={python_version} numpy pyyaml ninja scons auditwheel patchelf make cmake")
-        host.run_cmd("cmake --version")
-    except Exception as x:
-        print(x)
-        if host.keep_instance: exit(1)
-        ec2.cleanup(host.instance, host.sg_id)
-        exit(1)
+    host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get update")
+    if is_arm64:
+        suffix = "latest/download/Miniforge3-Linux-aarch64.sh"
+        host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get install -y gcc-10 g++-10 libc6-dev libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config")
+        host.run_cmd("update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10")
+        host.run_cmd("update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100")
+    else:
+        suffix = "latest/download/Miniforge3-Linux-x86_64.sh"
+        host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config")
+        if enable_cuda:
+            cudnn_ver = get_cudnn8_ver()
+            if not cudnn_ver:
+                print("Unable to match Cuda version with Cudnn version.. Exiting..")
+                ec2.cleanup(host.instance, host.sg_id)
+                exit(1)
+            host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y cuda-toolkit-{cuda_mm} " \
+                        f"libcudnn8={cudnn_ver} " \
+                        f"libcudnn8-dev={cudnn_ver}")
+    host.run_cmd(f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/{suffix}")
+    host.run_cmd("bash -f ~/miniforge.sh -b")
+    host.run_cmd("rm -f ~/miniforge.sh")
+    host.run_cmd("echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc")
+    host.run_cmd(f"$HOME/miniforge3/bin/conda install -y python={python_version} numpy pyyaml ninja scons auditwheel patchelf make cmake")
+    install_OpenMPI(host) # OpenMPI is used on all wheels
+    preset_lib_vars(host)
     print("Docker container ready to build")
+
+
+def get_cudnn8_ver():
+     '''
+     Get Cudnn version based on CUDA version.
+     '''
+     for prefix in CUDA_CUDNN_MAPPING:
+        if not cuda_version.startswith(prefix):
+            continue
+        return CUDA_CUDNN_MAPPING[prefix]
 
 
 def checkout_repo(host: remote, *,
@@ -142,9 +156,24 @@ def checkout_repo(host: remote, *,
     else:
         host.run_cmd(f"git clone {url} {git_clone_flags}")
     return None
-  
 
-def build_OpenBLAS(host: remote, git_flags: str = "") -> None:
+
+def preset_lib_vars(host: remote):
+    '''
+    Preloading LD_LIBRARY_PATH paths to ~/.bashrc for builds
+    '''
+    if is_arm64:
+        host.run_cmd("echo 'export LD_LIBRARY_PATH=" \
+                     "$HOME/acl/build:" \
+                     "$HOME/pytorch/build/lib:" \
+                     "$HOME/.openmpi/lib/' >> ~/.bashrc")
+    else:
+        host.run_cmd("echo 'export LD_LIBRARY_PATH=" \
+                     "$HOME/pytorch/build/lib:" \
+                     "$HOME/.openmpi/lib/' >> ~/.bashrc")
+
+
+def install_OpenBLAS(host: remote, git_flags: str = "") -> None:
     '''
     Currently used with arm64 builds
     '''
@@ -155,13 +184,26 @@ def build_OpenBLAS(host: remote, git_flags: str = "") -> None:
     print("OpenBlas built")
 
 
-def build_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
+def install_OpenMPI(host: remote):
+    '''
+    Install Open-MPI libraries for adding to Wheel builds 
+    '''
+    host.run_cmd(f"wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-{OPEN_MPI_VERSION}.tar.gz; " \
+                f"gunzip -c openmpi-$OPEN_MPI_VERSION.tar.gz | tar xf -; " \
+                f"cd openmpi-{OPEN_MPI_VERSION}; " \
+                f"./configure --prefix=/home/.openmpi; " \
+                f"make all install; " \
+                f"cd ..; rm openmpi-$OPEN_MPI_VERSION.tar.gz; " \
+                f"rm -rf openmpi-$OPEN_MPI_VERSION")
+
+
+def install_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
     '''
     It's in the name. Used for arm64 builds
     '''
     print('Build and install ARM Compute Library')
     host.run_cmd("mkdir $HOME/acl")
-    host.run_cmd(f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v22.11 {git_clone_flags}")
+    host.run_cmd(f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v{ARMCL_VERSION} {git_clone_flags}")
     host.run_cmd(f"pushd ComputeLibrary; " \
                     f"git fetch https://review.mlplatform.org/ml/ComputeLibrary && git cherry-pick --no-commit d2475c721e; " \
                     f"git fetch https://review.mlplatform.org/ml/ComputeLibrary refs/changes/68/9068/4 && git cherry-pick --no-commit FETCH_HEAD; " \
@@ -306,7 +348,7 @@ def complete_wheel(host: remote, folder: str, env_str: str = ""):
 def build_wheels(host:remote):
     processor = "cu"+cuda_version.replace('.','') if enable_cuda else "cpu"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    git_flags = " --depth 1 --shallow-submodules"
+    git_flags = " --depth 1 --shallow-submodules "
     torch_wheel_name = None
     branch = None
 
@@ -328,27 +370,27 @@ def build_wheels(host:remote):
 
     print("Begining arm64 PyTorch wheel build process...")
     if is_arm64:
-        build_OpenBLAS(host, git_flags)
+        install_OpenBLAS(host, git_flags)
 
         if enable_mkldnn:
-            build_ArmComputeLibrary(host, git_flags)
+            install_ArmComputeLibrary(host, git_flags)
             print("Patch codebase for ACL optimizations")
+            ## patches ##
             host.run_cmd(f"cd $HOME; git clone https://github.com/snadampal/builder.git; cd builder; git checkout pt2.0_cherrypick")
             host.run_cmd(f"pushd pytorch; " \
                         f"patch -p1 < $HOME/builder/patches/pytorch_addmm_91763.patch; " \
                         f"patch -p1 < $HOME/builder/patches/pytorch_matmul_heuristic.patch; " \
                         f"patch -p1 < $HOME/builder/patches/pytorch_c10_thp_93888.patch; popd")
-            print("build pytorch with mkldnn+acl backend")
+            ## Patches End ##
+            print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
             host.run_cmd(f"cd pytorch; " \
                         f" export ACL_ROOT_DIR=$HOME/ComputeLibrary:$HOME/acl; " \
                         f"{build_vars} python3 setup.py bdist_wheel")
-            host.run_cmd(f"echo 'export LD_LIBRARY_PATH=$HOME/acl/build:$HOME/pytorch/build/lib' >> ~/.bashrc")
         else:
             print("build pytorch without mkldnn backend")
             host.run_cmd(f"cd pytorch ; " \
                         f"{build_vars} python3 setup.py bdist_wheel")
-            host.run_cmd(f"echo 'export LD_LIBRARY_PATH=$HOME/pytorch/build/lib' >> ~/.bashrc")
     else:
         if enable_cuda:
             print(f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {cuda_version}...")
@@ -359,7 +401,6 @@ def build_wheels(host:remote):
             print("Begining x86_64 PyTorch wheel build process...")
             host.run_cmd(f"cd pytorch ; " \
                         f"{build_vars} python3 setup.py bdist_wheel")
-        host.run_cmd(f"echo 'export LD_LIBRARY_PATH=$HOME/pytorch/build/lib' >> ~/.bashrc")
 
     torch_wheel_name = complete_wheel(host, "pytorch")
     print('Installing PyTorch wheel')
@@ -400,7 +441,7 @@ def parse_arguments():
     parser.add_argument("--pytorch-only", action="store_true")
     parser.add_argument("--enable-mkldnn", action="store_true")
     parser.add_argument("--enable-cuda", action="store_true")
-    parser.add_argument("--cuda-version", choices=['11.1', '11.2', '11.3', '11.4', '11.5', '11.6','11.7','11.8','12.0'])
+    parser.add_argument("--cuda-version", type=str)
     parser.add_argument("--keep-instance-on-failure", action="store_true")
     return parser.parse_args()
 
@@ -430,11 +471,15 @@ if __name__ == '__main__':
         print("Mkldnn option is not available for x86_64")
         enable_mkldnn = False
 
-    instance_name = f"build-pytorch-{args.pytorch_version}-{args.python_version}"
+    instance_name = f"BUILD-PyTorch_{args.pytorch_version}_{args.python_version}"
     image = select_docker_image()
 
     instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
     addr = instance.public_dns_name
+
+    print("create/verify local directory for wheels.")
+    if not os.path.exists(WHEEL_DIR):
+        os.mkdir(WHEEL_DIR)
 
     remote.wait_for_connection(addr, 22)
     host = remote.RemoteHost(addr=addr, 
@@ -442,6 +487,7 @@ if __name__ == '__main__':
     host.instance = instance
     host.sg_id = sg_id
     host.keep_instance = args.keep_instance_on_failure
+    host.wheel_dir = WHEEL_DIR
 
     prep_host(host)
     host.start_docker(image, enable_cuda)
