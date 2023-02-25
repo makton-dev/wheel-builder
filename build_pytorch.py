@@ -98,8 +98,6 @@ def configure_docker(host: remote):
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     '''
     suffix = None
-    cuda_mm = cuda_version.split('.')[0]+"-"+cuda_version.split('.')[1]
-    
     print("Configure docker container")
     host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get update")
     if is_arm64:
@@ -111,6 +109,7 @@ def configure_docker(host: remote):
         suffix = "latest/download/Miniforge3-Linux-x86_64.sh"
         host.run_cmd("DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config")
         if enable_cuda:
+            cuda_mm = cuda_version.split('.')[0]+"-"+cuda_version.split('.')[1]
             cudnn_ver = get_cudnn8_ver()
             if not cudnn_ver:
                 print("Unable to match Cuda version with Cudnn version.. Exiting..")
@@ -475,13 +474,14 @@ if __name__ == '__main__':
     instance_name = f"BUILD-PyTorch_{args.pytorch_version}_{args.python_version}"
     image = select_docker_image()
 
-    instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
-    addr = instance.public_dns_name
-
     print("create/verify local directory for wheels.")
     if not os.path.exists(WHEEL_DIR):
         os.mkdir(WHEEL_DIR)
 
+    instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
+    addr = instance.public_dns_name
+
+    print("Waiting for host connection...")
     remote.wait_for_connection(addr, 22)
     host = remote.RemoteHost(addr=addr, 
                             keyfile_path=ec2.KEY_PATH)
