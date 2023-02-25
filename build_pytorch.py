@@ -80,7 +80,7 @@ def prep_host(host: remote):
         host.run_cmd("while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done")
         host.run_cmd("sudo apt-get update")
         if enable_cuda:
-            host.run_cmd(f"sudo apt-get -y install nvidia-driver-{NVIDIA_DRIVER_VERSION}")
+            host.run_cmd(f"DEBIAN_FRONTEND=noninteractive sudo apt-get -y install nvidia-driver-{NVIDIA_DRIVER_VERSION}")
             host.run_cmd("sudo nvidia-smi")
     except Exception as x:
         print("Failed to prepare host..")
