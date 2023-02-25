@@ -35,8 +35,8 @@ def get_ami_id(ami_pattern = None):
     return ami['ImageId']
 
 
-ARM_AMI = get_ami_id("*ubuntu-jammy-22.04-arm64-server-????????")
-X86_AMI = get_ami_id("*ubuntu-jammy-22.04-amd64-server-????????")
+ARM_AMI = get_ami_id("*ubuntu-focal-20.04-arm64-server-????????")
+X86_AMI = get_ami_id("*ubuntu-focal-20.04-amd64-server-????????")
 
 
 def create_ssh_key_pair():
