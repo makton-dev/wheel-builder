@@ -189,12 +189,12 @@ def install_OpenMPI(host: remote):
     Install Open-MPI libraries for adding to Wheel builds 
     '''
     host.run_cmd(f"wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-{OPEN_MPI_VERSION}.tar.gz; " \
-                f"gunzip -c openmpi-$OPEN_MPI_VERSION.tar.gz | tar xf -; " \
+                f"gunzip -c openmpi-{OPEN_MPI_VERSION}.tar.gz | tar xf -; " \
                 f"cd openmpi-{OPEN_MPI_VERSION}; " \
                 f"./configure --prefix=/home/.openmpi; " \
                 f"make all install; " \
-                f"cd ..; rm openmpi-$OPEN_MPI_VERSION.tar.gz; " \
-                f"rm -rf openmpi-$OPEN_MPI_VERSION")
+                f"cd ..; rm openmpi-{OPEN_MPI_VERSION}.tar.gz; " \
+                f"rm -rf openmpi-{OPEN_MPI_VERSION}")
 
 
 def install_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
