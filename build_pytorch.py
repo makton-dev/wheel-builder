@@ -107,23 +107,15 @@ def configure_docker(host: remote):
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     """
     arch = "aarch64" if is_arm64 else "x86_64"
+    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config "
     conda_pkgs = "numpy pyyaml ninja scons auditwheel patchelf make cmake "
-    print("Configure docker container")
-    host.run_cmd("apt-get update; "
-                 f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
-                 "bash -f ~/miniforge.sh -b; "
-                 "rm -f ~/miniforge.sh; " 
-                 "echo 'PATH=$HOME/miniforge3/bin:/home/.openmpi/bin:$PATH' >> ~/.bashrc")
+
+    print("Configure docker container...")
     if is_arm64:
-        host.run_cmd(
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y gcc-10 g++-10 libc6-dev libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config; "
-            "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
-            "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100")
+        os_pkgs += "gcc-10 g++-10 libc6-dev "
     else:
+        os_pkgs += "build-essential "
         conda_pkgs += "mkl mkl-include "
-        host.run_cmd(
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config"
-        )
         if enable_cuda:
             cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
             conda_pkgs += f"magma-cuda{cuda_mm.replace('-','')} "
@@ -132,14 +124,34 @@ def configure_docker(host: remote):
                 print("Unable to match Cuda version with Cudnn version.. Exiting..")
                 ec2.cleanup(host.instance, host.sg_id)
                 exit(1)
-            host.run_cmd(
-                f"echo 'export USE_CUDA=1 ' >> ~/.bashrc; "
-                f"DEBIAN_FRONTEND=noninteractive apt-get install -y cuda-toolkit-{cuda_mm} libcudnn8={cudnn_ver} libcudnn8-dev={cudnn_ver}; "
-                f"conda config --add channels pytorch"
-            )
+            os_pkgs += f"cuda-toolkit-{cuda_mm} libcudnn8={cudnn_ver} libcudnn8-dev={cudnn_ver} "
+
+    # Installing OS Packages
+    # Running apt-get update twice as it can have failures on the first run due to communication with Ubuntu repos
     host.run_cmd(
-        f"$HOME/miniforge3/bin/conda install -y python={python_version} {conda_pkgs}"
+        "apt-get update; apt-get update; "
+        f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}"
     )
+    if is_arm64:
+        host.run_cmd(
+            "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
+            "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100"
+        )
+
+    # Installing Conda
+    host.run_cmd(
+        f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
+        "bash -f ~/miniforge.sh -b; "
+        "rm -f ~/miniforge.sh; "
+        "echo 'PATH=$HOME/miniforge3/bin:/home/.openmpi/bin:$PATH' >> ~/.bashrc"
+    )
+    if enable_cuda:
+        host.run_cmd(
+            "conda config --add channels pytorch; "
+            "echo 'export USE_CUDA=1 ' >> ~/.bashrc; "
+        )
+    host.run_cmd(f"conda install -y python={python_version} {conda_pkgs}")
+
     install_OpenMPI(host)  # OpenMPI is used on all wheels
     preset_lib_vars(host)
     print("Docker container ready to build")
