@@ -1,6 +1,5 @@
 import time
 import os
-from typing import Dict, Optional
 from ec2_utils import ec2_ops as ec2, remote_ops as remote
 
 OPENBLAS_VERSION = "0.3.21"
@@ -9,40 +8,14 @@ OPEN_MPI_VERSION = "4.1.5"
 ARMCL_VERSION = "22.11"
 WHEEL_DIR = "wheels"
 
-## Ancillary app version maps ##
-# these are used to properly map the ancillary app versions with the
-# expected PyTorch version. These maps are the reason this is a Python
-# script, rather than BASH.
-TORCHVISION_MAPPING = {
-    # Order matters. Newest first
-    "v2.0.0": ("0.15.0", "-rc2"),
-    "v1.13.1": ("0.14.1", ""),
-    "v1.12.1": ("0.13.1", ""),
-    "v1.11.0": ("0.12.0", ""),
-}
-
-TORCHAUDIO_MAPPING = {
-    # Order matters. Newest first
-    "v2.0.0": ("2.0.0", "-rc2"),
-    "v1.13.1": ("0.13.1", ""),
-    "v1.12.1": ("0.12.1", ""),
-    "v1.11.0": ("0.11.0", ""),
-}
-
-TORCHTEXT_MAPPING = {
-    # Order matters. Newest first
-    "v2.0.0": ("0.15.0", "-rc2"),
-    "v1.13.1": ("0.14.1", ""),
-    "v1.12.1": ("0.13.1", ""),
-    "v1.11.0": ("0.12.0", ""),
-}
-
-TORCHTDATA_MAPPING = {
-    # Order matters. Newest first
-    "v2.0.0": ("0.6.0", "-rc2"),
-    "v1.13.1": ("0.5.1", ""),
-    "v1.12.1": ("0.4.1", ""),
-    "v1.11.0": ("0.3.0", ""),
+TORCH_VERSION_MAPPING = {
+    # Torch: ( TorchVision, TorchAudio, TorchText, TorchData )
+    "master": ("main", "main", "main", "main"),
+    "nightly": ("nightly", "nightly", "nightly", "nightly"),
+    "2.0.0-rc2": ("0.15.0-rc2", "2.0.0-rc2", "0.15.0-rc2", "0.6.0-rc2"),
+    "1.13.1": ("0.14.1", "0.13.1", "0.14.1", "0.5.1"),
+    "1.12.1": ("0.13.1", "0.12.1", "0.13.1", "0.4.1"),
+    "1.11.0": ("0.12.1", "0.11.0", "0.12.0", "0.3.0"),
 }
 
 # Mapping can be built from the nvidia repo:
@@ -167,26 +140,11 @@ def get_cudnn8_ver():
         return CUDA_CUDNN_MAPPING[prefix]
 
 
-def checkout_repo(
-    host: remote,
-    *,
-    branch: str = "master",
-    url: str,
-    git_clone_flags: str,
-    mapping: Dict[str, str],
-) -> Optional[str]:
-    for prefix in mapping:
-        if not branch.startswith(prefix):
-            continue
-        version = f"{mapping[prefix][0]}{mapping[prefix][1]}"
-        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
-        return version
-
-    if branch == "nightly":
-        host.run_cmd(f"git clone {url} -b nightly {git_clone_flags}")
+def get_processor_type():
+    if enable_cuda:
+        return "cu" + cuda_version.split(".")[0] + cuda_version.split(".")[1]
     else:
-        host.run_cmd(f"git clone {url} {git_clone_flags}")
-    return None
+        return "cpu"
 
 
 def preset_lib_vars(host: remote):
@@ -264,27 +222,19 @@ def install_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
 
 
 def build_torchvision(
-    host: remote, branch: str = "master", git_clone_flags: str = ""
+    host: remote, version: str = "master", git_clone_flags: str = ""
 ) -> str:
-    """
-    Will build TorchVision for matching PyTorch version.
-    """
-    processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
-    print("Checking out TorchVision repo")
-    build_version = checkout_repo(
-        host,
-        branch=branch,
-        url="https://github.com/pytorch/vision",
-        git_clone_flags=git_clone_flags,
-        mapping=TORCHVISION_MAPPING,
-    )
-    print("Building TorchVision wheel")
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/vision"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    if branch == "nightly":
-        version = host.check_output(
+
+    print("Checkout TorchVision repo...")
+    if version in ["main", "nightly"]:
+        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        build_version = host.check_output(
             ["if [ -f vision/version.txt ]; then cat vision/version.txt; fi"]
         ).strip()
-        if len(version) == 0:
+        if len(build_version) == 0:
             # In older revisions, version was embedded in setup.py
             version = (
                 host.check_output(["grep", '"version = \'"', "vision/setup.py"])
@@ -297,33 +247,30 @@ def build_torchvision(
                 .split()[0]
                 .replace("-", "")
             )
-            build_vars += f"BUILD_VERSION={version}.dev{build_date}+{processor} "
-    elif build_version is not None:
-        build_vars += f"BUILD_VERSION={build_version}+{processor} "
+            build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
+    else:
+        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        build_vars += f"BUILD_VERSION={version}+{processor} "
 
+    print(f"Building TorchVision wheel version: {version}+{processor}")
     host.run_cmd(f"cd vision; {build_vars} python3 setup.py bdist_wheel")
     wheel_name = complete_wheel(host, "vision")
     return wheel_name
 
 
 def build_torchaudio(
-    host: remote, branch: str = "master", git_clone_flags: str = ""
+    host: remote, version: str = "master", git_clone_flags: str = ""
 ) -> str:
     arch = "aarch64" if is_arm64 else "x86_64"
-    processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
-    print("Checking out TorchAudio repo")
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/audio"
     git_clone_flags += " --recurse-submodules"
-    build_version = checkout_repo(
-        host,
-        branch=branch,
-        url="https://github.com/pytorch/audio",
-        git_clone_flags=git_clone_flags,
-        mapping=TORCHAUDIO_MAPPING,
-    )
-    print("Building TorchAudio wheel")
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    if branch == "nightly":
-        version = (
+
+    print("Checking out TorchAudio repo")
+    if version in ["main", "nightly"]:
+        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        build_version = (
             host.check_output(["grep", '"version = \'"', "audio/setup.py"])
             .strip()
             .split("'")[1][:-2]
@@ -334,10 +281,12 @@ def build_torchaudio(
             .split()[0]
             .replace("-", "")
         )
-        build_vars += f"BUILD_VERSION={version}.dev{build_date}+{processor} "
-    elif build_version is not None:
-        build_vars += f"BUILD_VERSION={build_version}+{processor} "
+        build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
+    else:
+        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        build_vars += f"BUILD_VERSION={version}+{processor} "
 
+    print("Building TorchAudio wheel")
     host.run_cmd(f"cd audio; {build_vars} python3 setup.py bdist_wheel")
 
     # torchaudio has it's library in a strange place. symlinking to a easier location
@@ -351,23 +300,18 @@ def build_torchaudio(
 
 
 def build_torchtext(
-    host: remote, branch: str = "master", git_clone_flags: str = ""
+    host: remote, version: str = "master", git_clone_flags: str = ""
 ) -> str:
     arch = "aarch64" if is_arm64 else "x86_64"
-    processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
-    print("Checking out TorchText repo")
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/text"
     git_clone_flags += " --recurse-submodules "
-    build_version = checkout_repo(
-        host,
-        branch=branch,
-        url="https://github.com/pytorch/text",
-        git_clone_flags=git_clone_flags,
-        mapping=TORCHTEXT_MAPPING,
-    )
-    print("Building TorchText wheel")
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    if branch == "nightly":
-        version = host.check_output(
+
+    print("Checking out TorchText repo")
+    if version in ["main", "nightly"]:
+        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        build_version = host.check_output(
             ["if [ -f text/version.txt ]; then cat text/version.txt; fi"]
         ).strip()
         build_date = (
@@ -376,10 +320,12 @@ def build_torchtext(
             .split()[0]
             .replace("-", "")
         )
-        build_vars += f"BUILD_VERSION={version}.dev{build_date}+{processor} "
-    elif build_version is not None:
-        build_vars += f"BUILD_VERSION={build_version}+{processor} "
+        build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
+    else:
+        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        build_vars += f"BUILD_VERSION={version}+{processor} "
 
+    print("Building TorchText wheel")
     host.run_cmd(f"cd text; {build_vars} python3 setup.py bdist_wheel")
 
     # torchtext has it's library in a strange place. symlinking to a easier location
@@ -393,25 +339,20 @@ def build_torchtext(
 
 
 def build_torchdata(
-    host: remote, branch: str = "master", git_clone_flags: str = ""
+    host: remote, version: str = "master", git_clone_flags: str = ""
 ) -> str:
-    processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
-    print("Checking out TorchData repo")
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/data"
     git_clone_flags += " --recurse-submodules"
-    build_version = checkout_repo(
-        host,
-        branch=branch,
-        url="https://github.com/pytorch/data",
-        git_clone_flags=git_clone_flags,
-        mapping=TORCHTDATA_MAPPING,
-    )
-    print("Building TorchData wheel")
     build_vars = (
         f"BUILD_S3=1 PYTHON_VERSION={python_version} "
         f"PYTORCH_VERSION={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     )
-    if branch == "nightly":
-        version = host.check_output(
+
+    print("Checking out TorchData repo")
+    if version == ["main", "nightly"]:
+        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        build_version = host.check_output(
             ["if [ -f data/version.txt ]; then cat data/version.txt; fi"]
         ).strip()
         build_date = (
@@ -420,10 +361,12 @@ def build_torchdata(
             .split()[0]
             .replace("-", "")
         )
-        build_vars += f"BUILD_VERSION={version}.dev{build_date}+{processor}  "
-    elif build_version is not None:
-        build_vars += f"BUILD_VERSION={build_version}+{processor} "
+        build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor}  "
+    else:
+        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        build_vars += f"BUILD_VERSION={version}+{processor} "
 
+    print("Building TorchData wheel...")
     host.run_cmd(f"cd data; {build_vars} python3 setup.py bdist_wheel")
     wheel_name = complete_wheel(
         host, "data", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/data/build/lib"
@@ -523,11 +466,18 @@ def build_wheels(host: remote):
     host.run_cmd(f"pip3 install $HOME/pytorch/wheelhouse/{torch_wheel_name}")
     print("PyTorch Wheel Built")
 
-    vision_wheel_name = build_torchvision(host, branch, git_flags)
-    audio_wheel_name = build_torchaudio(host, branch, git_flags)
-    text_wheel_name = build_torchtext(host, branch, git_flags)
-    data_wheel_name = build_torchdata(host, branch, git_flags)
-
+    vision_wheel_name = build_torchvision(
+        host, TORCH_VERSION_MAPPING[pytorch_version][0], git_flags
+    )
+    audio_wheel_name = build_torchaudio(
+        host, TORCH_VERSION_MAPPING[pytorch_version][1], git_flags
+    )
+    text_wheel_name = build_torchtext(
+        host, TORCH_VERSION_MAPPING[pytorch_version][2], git_flags
+    )
+    data_wheel_name = build_torchdata(
+        host, TORCH_VERSION_MAPPING[pytorch_version][3], git_flags
+    )
     print(
         "Wheels built:\n"
         f"{torch_wheel_name}\n"
@@ -563,7 +513,7 @@ def parse_arguments():
     parser.add_argument(
         "--pytorch-version",
         type=str,
-        choices=["1.11.0", "1.12.1", "1.13.1", "2.0.0-rc2", "nightly", "master"],
+        choices=list(TORCH_VERSION_MAPPING.keys()),
         default="master",
     )
     parser.add_argument("--is-arm64", action="store_true")
