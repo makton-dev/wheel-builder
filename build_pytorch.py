@@ -4,6 +4,7 @@ from ec2_utils import ec2_ops as ec2, remote_ops as remote
 
 OPENBLAS_VERSION = "0.3.21"
 NVIDIA_DRIVER_VERSION = "470"
+NCCL_VERSION = "2.16.5"
 OPEN_MPI_VERSION = "4.1.5"
 ARMCL_VERSION = "22.11"
 WHEEL_DIR = "wheels"
@@ -42,7 +43,6 @@ cuda_version: str = None
 python_version: str = None
 pytorch_version: str = None
 
-
 def prep_host(host: remote):
     print("Preparing host for building thru Docker")
     time.sleep(5)
@@ -79,54 +79,35 @@ def configure_docker(host: remote):
     Configures Docker container for building wheels.
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     """
-    arch = "aarch64" if is_arm64 else "x86_64"
     os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config "
-    conda_pkgs = "numpy pyyaml ninja scons auditwheel patchelf make cmake "
 
     print("Configure docker container...")
+    host.run_cmd("apt-get update; DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
     if is_arm64:
         os_pkgs += "gcc-10 g++-10 libc6-dev "
+        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
+        host.run_cmd(
+            "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
+            "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100"
+        )
     else:
         os_pkgs += "build-essential "
-        conda_pkgs += "mkl mkl-include "
         if enable_cuda:
             cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
-            conda_pkgs += f"magma-cuda{cuda_mm.replace('-','')} "
             cudnn_ver = get_cudnn8_ver()
             if not cudnn_ver:
                 print("Unable to match Cuda version with Cudnn version.. Exiting..")
                 ec2.cleanup(host.instance, host.sg_id)
                 exit(1)
+            host.run_cmd("echo 'export USE_CUDA=1' >> ~/.bashrc")
             os_pkgs += f"cuda-toolkit-{cuda_mm} libcudnn8={cudnn_ver} libcudnn8-dev={cudnn_ver} "
+        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
 
-    # Installing OS Packages
-    # Running apt-get update twice as it can have failures on the first run due to communication with Ubuntu repos
-    host.run_cmd(
-        "apt-get update; apt-get update; "
-        f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}"
-    )
-    if is_arm64:
-        host.run_cmd(
-            "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
-            "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100"
-        )
-
-    # Installing Conda
-    host.run_cmd(
-        f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
-        "bash -f ~/miniforge.sh -b; "
-        "rm -f ~/miniforge.sh; "
-        "echo 'PATH=$HOME/miniforge3/bin:/home/.openmpi/bin:$PATH' >> ~/.bashrc"
-    )
-    if enable_cuda:
-        host.run_cmd(
-            "conda config --add channels pytorch; "
-            "echo 'export USE_CUDA=1 ' >> ~/.bashrc; "
-        )
-    host.run_cmd(f"conda install -y python={python_version} {conda_pkgs}")
-
-    install_OpenMPI(host)  # OpenMPI is used on all wheels
-    preset_lib_vars(host)
+    install_conda(host)
+    install_OpenMPI(host)
+    if enable_cuda: install_nccl(host)
+    if is_arm64: install_OpenBLAS(host)
+    if enable_mkldnn: install_ArmComputeLibrary(host)
     print("Docker container ready to build")
 
 
@@ -147,38 +128,39 @@ def get_processor_type():
         return "cpu"
 
 
-def preset_lib_vars(host: remote):
-    """
-    Preloading LD_LIBRARY_PATH paths to ~/.bashrc for builds
-    """
-    if is_arm64:
-        host.run_cmd(
-            "echo 'export LD_LIBRARY_PATH="
-            "$HOME/acl/build:"
-            "$HOME/pytorch/build/lib:"
-            "/opt/OpenBLAS/lib/:"
-            "home/.openmpi/lib' >> ~/.bashrc"
-        )
-    else:
-        host.run_cmd(
-            "echo 'export LD_LIBRARY_PATH="
-            "$HOME/pytorch/build/lib:"
-            "home/.openmpi/lib' >> ~/.bashrc"
-        )
+def install_conda(host: remote):
+    arch = "aarch64" if is_arm64 else "x86_64"
+    conda_pkgs = "numpy pyyaml ninja scons auditwheel patchelf make cmake "
+    host.run_cmd(
+        f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
+        "bash -f ~/miniforge.sh -b; "
+        "rm -f ~/miniforge.sh; "
+        "echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc"
+    )
+    if not is_arm64:
+        conda_pkgs += "mkl mkl-include "
+        if enable_cuda:
+            cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
+            conda_pkgs += f"magma-cuda{cuda_mm.replace('-','')} "
+            host.run_cmd("conda config --add channels pytorch; "\
+                         "echo 'export LD_LIBRARY_PATH=$HOME/miniforge3/pkgs/mkl-*/lib:$LD_LIBRARY_PATH'  >> ~/.bashrc")
+    host.run_cmd(f"conda install -y python={python_version} {conda_pkgs}")
 
 
-def install_OpenBLAS(host: remote, git_flags: str = "") -> None:
+def install_OpenBLAS(host: remote) -> None:
     """
     Currently used with arm64 builds
     """
     print("Building OpenBLAS for ARM64")
     host.run_cmd(
-        f"git clone https://github.com/xianyi/OpenBLAS -b v{OPENBLAS_VERSION} {git_flags}"
+        f"git clone https://github.com/xianyi/OpenBLAS -b v{OPENBLAS_VERSION} --depth 1 --shallow-submodules"
     )
     make_flags = "NUM_THREADS=64 USE_OPENMP=1 NO_SHARED=1 DYNAMIC_ARCH=1 TARGET=ARMV8"
     host.run_cmd(
-        f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS"
+        f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS; "
+        "echo 'export LD_LIBRARY_PATH=/opt/OpenBLAS/lib/:$LD_LIBRARY_PATH' >> ~/.bashrc"
     )
+
     print("OpenBlas built")
 
 
@@ -193,20 +175,30 @@ def install_OpenMPI(host: remote):
         f"./configure --prefix=/home/.openmpi; "
         f"make all install; "
         f"cd ..; rm openmpi-{OPEN_MPI_VERSION}.tar.gz; "
-        f"rm -rf openmpi-{OPEN_MPI_VERSION}"
+        f"rm -rf openmpi-{OPEN_MPI_VERSION}; "
+        "echo 'PATH=/home/.openmpi/bin:$PATH' >> ~/.bashrc"
+        "echo 'export LD_LIBRARY_PATH=/home/.openmpi/lib:$LD_LIBRARY_PATH' >> ~/.bashrc"
     )
 
 
-def install_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
+def install_nccl(host: remote):
+    '''
+    Install Nvidia CCL for CUDA
+    '''
+    host.run_cmd(f"git clone https://github.com/NVIDIA/nccl.git -b v{NCCL_VERSION}-1 "
+                "pushd nccl "
+                "make -j64 src.build BUILDDIR=/usr/local "
+                "popd && rm -rf nccl")
+
+
+def install_ArmComputeLibrary(host: remote) -> None:
     """
     It's in the name. Used for arm64 builds
     """
     print("Build and install ARM Compute Library")
     host.run_cmd("mkdir $HOME/acl")
     host.run_cmd(
-        f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v{ARMCL_VERSION} {git_clone_flags}"
-    )
-    host.run_cmd(
+        f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v{ARMCL_VERSION} --depth 1 --shallow-submodules; "
         f"pushd ComputeLibrary; "
         f"git fetch https://review.mlplatform.org/ml/ComputeLibrary && git cherry-pick --no-commit d2475c721e; "
         f"git fetch https://review.mlplatform.org/ml/ComputeLibrary refs/changes/68/9068/4 && git cherry-pick --no-commit FETCH_HEAD; "
@@ -216,21 +208,22 @@ def install_ArmComputeLibrary(host: remote, git_clone_flags: str = "") -> None:
         f"cp -r include $acl_install_dir; "
         f"cp -r utils $acl_install_dir; "
         f"cp -r support $acl_install_dir; "
-        f"popd"
+        f"popd; "
+        "echo 'export LD_LIBRARY_PATH=$HOME/acl/build:$LD_LIBRARY_PATH' >> ~/.bashrc; "
+        "echo 'export ACL_ROOT_DIR=$HOME/ComputeLibrary:$HOME/acl' >> ~/.bashrc"
     )
     print("ARM Compute Library Installed")
 
 
-def build_torchvision(
-    host: remote, version: str = "master", git_clone_flags: str = ""
-) -> str:
+def build_torchvision(host: remote, version: str = "master") -> str:
     processor = get_processor_type()
+    git_clone_flags = "--depth 1 --shallow-submodules"
     url = "https://github.com/pytorch/vision"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
 
     print("Checkout TorchVision repo...")
     if version in ["main", "nightly"]:
-        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
         build_version = host.check_output(
             ["if [ -f vision/version.txt ]; then cat vision/version.txt; fi"]
         ).strip()
@@ -242,52 +235,50 @@ def build_torchvision(
                 .split("'")[1][:-2]
             )
             build_date = (
-                host.check_output("cd pytorch ; git log --pretty=format:%s -1")
+                host.check_output("cd vision ; git log --pretty=format:%s -1")
                 .strip()
                 .split()[0]
                 .replace("-", "")
             )
             build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
     else:
-        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
         build_vars += f"BUILD_VERSION={version}+{processor} "
 
     print(f"Building TorchVision wheel version: {version}+{processor}")
-    host.run_cmd(f"cd vision; {build_vars} python3 setup.py bdist_wheel")
+    host.run_cmd(f"cd $HOME/vision; {build_vars} python3 setup.py bdist_wheel")
     wheel_name = complete_wheel(host, "vision")
     return wheel_name
 
 
-def build_torchaudio(
-    host: remote, version: str = "master", git_clone_flags: str = ""
-) -> str:
+def build_torchaudio(host: remote, version: str = "master") -> str:
     arch = "aarch64" if is_arm64 else "x86_64"
     processor = get_processor_type()
     url = "https://github.com/pytorch/audio"
-    git_clone_flags += " --recurse-submodules"
+    git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
 
     print("Checking out TorchAudio repo")
     if version in ["main", "nightly"]:
-        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
         build_version = (
             host.check_output(["grep", '"version = \'"', "audio/setup.py"])
             .strip()
             .split("'")[1][:-2]
         )
         build_date = (
-            host.check_output("cd pytorch ; git log --pretty=format:%s -1")
+            host.check_output("cd audio ; git log --pretty=format:%s -1")
             .strip()
             .split()[0]
             .replace("-", "")
         )
         build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
     else:
-        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
         build_vars += f"BUILD_VERSION={version}+{processor} "
 
     print("Building TorchAudio wheel")
-    host.run_cmd(f"cd audio; {build_vars} python3 setup.py bdist_wheel")
+    host.run_cmd(f"cd $HOME/audio; {build_vars} python3 setup.py bdist_wheel")
 
     # torchaudio has it's library in a strange place. symlinking to a easier location
     host.run_cmd(
@@ -299,34 +290,32 @@ def build_torchaudio(
     return wheel_name
 
 
-def build_torchtext(
-    host: remote, version: str = "master", git_clone_flags: str = ""
-) -> str:
+def build_torchtext(host: remote, version: str = "master") -> str:
     arch = "aarch64" if is_arm64 else "x86_64"
     processor = get_processor_type()
     url = "https://github.com/pytorch/text"
-    git_clone_flags += " --recurse-submodules "
+    git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
     build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
 
     print("Checking out TorchText repo")
     if version in ["main", "nightly"]:
-        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
         build_version = host.check_output(
             ["if [ -f text/version.txt ]; then cat text/version.txt; fi"]
         ).strip()
         build_date = (
-            host.check_output("cd pytorch ; git log --pretty=format:%s -1")
+            host.check_output("cd text ; git log --pretty=format:%s -1")
             .strip()
             .split()[0]
             .replace("-", "")
         )
         build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor} "
     else:
-        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
         build_vars += f"BUILD_VERSION={version}+{processor} "
 
     print("Building TorchText wheel")
-    host.run_cmd(f"cd text; {build_vars} python3 setup.py bdist_wheel")
+    host.run_cmd(f"cd $HOME/text; {build_vars} python3 setup.py bdist_wheel")
 
     # torchtext has it's library in a strange place. symlinking to a easier location
     host.run_cmd(
@@ -338,12 +327,10 @@ def build_torchtext(
     return wheel_name
 
 
-def build_torchdata(
-    host: remote, version: str = "master", git_clone_flags: str = ""
-) -> str:
+def build_torchdata(host: remote, version: str = "master") -> str:
     processor = get_processor_type()
     url = "https://github.com/pytorch/data"
-    git_clone_flags += " --recurse-submodules"
+    git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
     build_vars = (
         f"BUILD_S3=1 PYTHON_VERSION={python_version} "
         f"PYTORCH_VERSION={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
@@ -351,25 +338,58 @@ def build_torchdata(
 
     print("Checking out TorchData repo")
     if version == ["main", "nightly"]:
-        host.run_cmd(f"git clone {url} -b {version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
         build_version = host.check_output(
             ["if [ -f data/version.txt ]; then cat data/version.txt; fi"]
         ).strip()
         build_date = (
-            host.check_output("cd pytorch ; git log --pretty=format:%s -1")
+            host.check_output("cd data ; git log --pretty=format:%s -1")
             .strip()
             .split()[0]
             .replace("-", "")
         )
         build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor}  "
     else:
-        host.run_cmd(f"git clone {url} -b v{version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
         build_vars += f"BUILD_VERSION={version}+{processor} "
 
     print("Building TorchData wheel...")
-    host.run_cmd(f"cd data; {build_vars} python3 setup.py bdist_wheel")
+    host.run_cmd(f"cd $HOME/data; {build_vars} python3 setup.py bdist_wheel")
     wheel_name = complete_wheel(
         host, "data", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/data/build/lib"
+    )
+    return wheel_name
+
+
+def build_xla(host: remote, version: str = "master") -> str:
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/xla"
+    git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
+    build_vars = (
+        f"PYTHON_VERSION={python_version} "
+        f"PYTORCH_VERSION={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
+    )
+    print("Checking out TorchXLA repo")
+    if version == ["main", "nightly"]:
+        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
+        build_version = host.check_output(
+            ["if [ -f data/version.txt ]; then cat data/version.txt; fi"]
+        ).strip()
+        build_date = (
+            host.check_output("cd xla ; git log --pretty=format:%s -1")
+            .strip()
+            .split()[0]
+            .replace("-", "")
+        )
+        build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor}  "
+    else:
+        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
+        build_vars += f"BUILD_VERSION={version}+{processor} "
+
+    print("Building TorchXLA wheel...")
+    host.run_cmd(f"cd $HOME/xla; {build_vars} python3 setup.py bdist_wheel")
+    wheel_name = complete_wheel(
+        host, "data", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/xla/build/lib"
     )
     return wheel_name
 
@@ -377,33 +397,35 @@ def build_torchdata(
 def complete_wheel(host: remote, folder: str, env_str: str = ""):
     platform = "manylinux_2_31_aarch64" if is_arm64 else "manylinux_2_31_x86_64"
     wheel_name = host.list_dir(f"$HOME/{folder}/dist")[0]
-
-    print(f"Repairing {wheel_name} with auditwheel")
-    host.run_cmd(
-        f"cd $HOME/{folder}; {env_str} auditwheel repair --plat {platform}  dist/{wheel_name}"
-    )
-    repaired_wheel_name = host.list_dir(f"$HOME/{folder}/wheelhouse")[0]
-    print(f"{repaired_wheel_name} is the new name of the wheel")
-
+    if "pytorch" in folder:
+        print(f"Repairing {wheel_name} with auditwheel")
+        host.run_cmd(
+            f"cd $HOME/{folder}; {env_str} auditwheel repair --plat {platform}  dist/{wheel_name}"
+        )
+        repaired_wheel_name = host.list_dir(f"$HOME/{folder}/wheelhouse")[0]
+        print(f"moving {repaired_wheel_name} wheel to {folder}/dist..")
+        host.run_cmd(f"mv $HOME/{folder}/wheelhouse/{repaired_wheel_name} $HOME/{folder}/dist/")
+    else:
+        repaired_wheel_name = wheel_name
     print(f"Copying {repaired_wheel_name} wheel to local device")
-    host.download_wheel(os.path.join(folder, "wheelhouse", repaired_wheel_name))
+    host.download_wheel(os.path.join(folder, "dist", repaired_wheel_name))
     return repaired_wheel_name
 
 
-def build_wheels(host: remote):
+def build_torch(host: remote):
     processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
-    build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    git_flags = " --depth 1 --shallow-submodules "
+    build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 BUILD_TEST=0 PYTORCH_BUILD_NUMBER=1 "
+    git_flags = " --depth 1 --shallow-submodules --recurse-submodules"
+    git_url = "https://github.com/pytorch/pytorch"
     torch_wheel_name = None
     branch = None
 
+    
     print("Checking out PyTorch repo")
     # Version to branch logic
     if pytorch_version == "master" or args.pytorch_version == "nightly":
         branch = pytorch_version
-        host.run_cmd(
-            f"git clone --recurse-submodules -b {branch} https://github.com/pytorch/pytorch {git_flags}"
-        )
+        host.run_cmd(f"cd $HOME; git clone {git_url} -b {branch} {git_flags}")
         build_date = (
             host.check_output("cd pytorch ; git log --pretty=format:%s -1")
             .strip()
@@ -411,81 +433,49 @@ def build_wheels(host: remote):
             .replace("-", "")
         )
         version = host.check_output("cat pytorch/version.txt").strip()[:-2]
-        build_vars += f"BUILD_TEST=0 PYTORCH_BUILD_VERSION={version}.dev{build_date}+{processor} PYTORCH_BUILD_NUMBER=1 "
+        build_vars += f"PYTORCH_BUILD_VERSION={version}.dev{build_date}+{processor} "
     else:
         branch = "v" + pytorch_version
-        host.run_cmd(
-            f"git clone --recurse-submodules -b {branch} https://github.com/pytorch/pytorch {git_flags}"
-        )
-        build_vars += f"BUILD_TEST=0 PYTORCH_BUILD_VERSION={pytorch_version}+{processor} PYTORCH_BUILD_NUMBER=1 "
+        host.run_cmd(f"cd $HOME; git clone {git_url} -b {branch} {git_flags}")
+        build_vars += f"PYTORCH_BUILD_VERSION={pytorch_version}+{processor} "
 
     print("Install pytorch python dependent packages")
     host.run_cmd("pip install -r pytorch/requirements.txt")
 
-    print("Begining arm64 PyTorch wheel build process...")
     if is_arm64:
-        install_OpenBLAS(host, git_flags)
-
+        print("Begining arm64 PyTorch wheel build process...")
         if enable_mkldnn:
-            install_ArmComputeLibrary(host, git_flags)
             print("Patch codebase for ACL optimizations")
             ## patches ##
             host.run_cmd(
-                f"cd $HOME; git clone https://github.com/snadampal/builder.git; cd builder; git checkout pt2.0_cherrypick"
-            )
-            host.run_cmd(
-                f"pushd pytorch; "
+                f"cd $HOME; git clone https://github.com/snadampal/builder.git; cd builder; "
+                f"git checkout pt2.0_cherrypick; "
+                f"cd $HOME/pytorch; "
                 f"patch -p1 < $HOME/builder/patches/pytorch_addmm_91763.patch; "
                 f"patch -p1 < $HOME/builder/patches/pytorch_matmul_heuristic.patch; "
-                f"patch -p1 < $HOME/builder/patches/pytorch_c10_thp_93888.patch; popd"
+                f"patch -p1 < $HOME/builder/patches/pytorch_c10_thp_93888.patch"
             )
             ## Patches End ##
             print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
             host.run_cmd(
-                f"cd pytorch; "
-                f" export ACL_ROOT_DIR=$HOME/ComputeLibrary:$HOME/acl; "
-                f"{build_vars} python3 setup.py bdist_wheel"
+                f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel"
             )
         else:
             print("build pytorch without mkldnn backend")
-            host.run_cmd(f"cd pytorch ; " f"{build_vars} python3 setup.py bdist_wheel")
+            host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
     else:
         if enable_cuda:
-            print(
-                f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {cuda_version}..."
-            )
-            host.run_cmd(f"echo 'export USE_CUDA=1' >> ~/.bashrc")
-            host.run_cmd(f"cd pytorch ; " f"{build_vars} python3 setup.py bdist_wheel")
+            print(f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {cuda_version}...")
         else:
             print("Begining x86_64 PyTorch wheel build process...")
-            host.run_cmd(f"cd pytorch ; " f"{build_vars} python3 setup.py bdist_wheel")
+        print(f"Building with the following variables: {build_vars}")
+        host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
 
     torch_wheel_name = complete_wheel(host, "pytorch")
     print("Installing PyTorch wheel")
-    host.run_cmd(f"pip3 install $HOME/pytorch/wheelhouse/{torch_wheel_name}")
-    print("PyTorch Wheel Built")
-
-    vision_wheel_name = build_torchvision(
-        host, TORCH_VERSION_MAPPING[pytorch_version][0], git_flags
-    )
-    audio_wheel_name = build_torchaudio(
-        host, TORCH_VERSION_MAPPING[pytorch_version][1], git_flags
-    )
-    text_wheel_name = build_torchtext(
-        host, TORCH_VERSION_MAPPING[pytorch_version][2], git_flags
-    )
-    data_wheel_name = build_torchdata(
-        host, TORCH_VERSION_MAPPING[pytorch_version][3], git_flags
-    )
-    print(
-        "Wheels built:\n"
-        f"{torch_wheel_name}\n"
-        f"{vision_wheel_name}\n"
-        f"{audio_wheel_name}\n"
-        f"{text_wheel_name}\n"
-        f"{data_wheel_name}\n"
-    )
+    host.run_cmd(f"pip3 install $HOME/pytorch/dist/{torch_wheel_name}")
+    return torch_wheel_name
 
 
 def select_docker_image():
@@ -571,7 +561,22 @@ if __name__ == "__main__":
     prep_host(host)
     host.start_docker(image, enable_cuda)
     configure_docker(host)
-    build_wheels(host)
+
+    # build the wheels
+    torch_wheel_name = build_torch(host)
+    vision_wheel_name = build_torchvision(host, TORCH_VERSION_MAPPING[pytorch_version][0])
+    audio_wheel_name = build_torchaudio(host, TORCH_VERSION_MAPPING[pytorch_version][1])
+    text_wheel_name = build_torchtext(host, TORCH_VERSION_MAPPING[pytorch_version][2])
+    data_wheel_name = build_torchdata(host, TORCH_VERSION_MAPPING[pytorch_version][3])
+    
+    print(
+        "Wheels built:\n"
+        f"{torch_wheel_name}\n"
+        f"{vision_wheel_name}\n"
+        f"{audio_wheel_name}\n"
+        f"{text_wheel_name}\n"
+        f"{data_wheel_name}\n"
+    )
 
     print(f"Terminating instance and cleaning up")
     ec2.cleanup(instance, sg_id)
