@@ -192,9 +192,10 @@ def install_nccl(host: remote):
     Install Nvidia CCL for CUDA
     """
     host.run_cmd(
-        f"git clone https://github.com/NVIDIA/nccl.git -b v{NCCL_VERSION}-1 "
-        "pushd nccl "
-        "make -j64 src.build BUILDDIR=/usr/local "
+        "cd $HOME; "
+        f"git clone https://github.com/NVIDIA/nccl.git -b v{NCCL_VERSION}-1; "
+        "pushd nccl; "
+        "make -j64 src.build BUILDDIR=/usr/local; "
         "popd && rm -rf nccl"
     )
 
@@ -424,7 +425,7 @@ def complete_wheel(host: remote, folder: str, env_str: str = ""):
 
 
 def build_torch(host: remote):
-    processor = "cu" + cuda_version.replace(".", "") if enable_cuda else "cpu"
+    processor = get_processor_type()
     build_vars = (
         "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 PYTORCH_BUILD_NUMBER=1 "
     )
@@ -484,6 +485,9 @@ def build_torch(host: remote):
         print(f"Building with the following variables: {build_vars}")
         host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
 
+    host.run_cmd(
+        "echo 'export LD_LIBRARY_PATH=$HOME/pytorch/build/lib:$LD_LIBRARY_PATH' >> ~/.bashrc"
+    )
     torch_wheel_name = complete_wheel(host, "pytorch")
     print("Installing PyTorch wheel")
     host.run_cmd(f"pip3 install $HOME/pytorch/dist/{torch_wheel_name}")
@@ -524,7 +528,7 @@ def parse_arguments():
     parser.add_argument("--enable-cuda", action="store_true")
     parser.add_argument("--cuda-version", type=str)
     parser.add_argument("--keep-instance-on-failure", action="store_true")
-    parser.add_argument()
+    parser.add_argument("--torch-only", action="store_true")
     return parser.parse_args()
 
 

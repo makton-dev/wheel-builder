@@ -43,6 +43,7 @@ pytorch/build_pytorch.py --pytorch-version x.x.x(-xxx) --python-version x.x
 | --enable-cuda | add to build x86_64 wheels with nVidia Cuda Toolkit | ignored when --is-arm64 is set |
 | --cuda-version | set nVidia CUDA Toolkit version x.x.x (11.6.0) | required when cuda enabled |
 | --keep-instance-on-failure | add to keep instance running after a failure.  | Used to troubleshoot the build process |
+| --torch-only | will build torch wheel only | used mainly for updates to torch only |
 
 ### Supported PyTorch versions
 When building supported PyTorch version, this will also build the supporting apps (TorchVision, TorchAudio, TorchText, Torchdata)
