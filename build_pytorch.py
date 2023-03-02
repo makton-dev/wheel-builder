@@ -293,9 +293,7 @@ def build_torchaudio(host: remote, version: str = "master") -> str:
     host.run_cmd(
         f"ln -s $HOME/audio/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchaudio/lib $HOME/audio/build/lib"
     )
-    wheel_name = complete_wheel(
-        host, "audio", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/audio/build/lib"
-    )
+    wheel_name = complete_wheel(host, "audio")
     return wheel_name
 
 
@@ -330,9 +328,7 @@ def build_torchtext(host: remote, version: str = "master") -> str:
     host.run_cmd(
         f"ln -s $HOME/text/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchtext/lib $HOME/text/build/lib"
     )
-    wheel_name = complete_wheel(
-        host, "text", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/text/build/lib"
-    )
+    wheel_name = complete_wheel(host, "text")
     return wheel_name
 
 
@@ -364,9 +360,7 @@ def build_torchdata(host: remote, version: str = "master") -> str:
 
     print("Building TorchData wheel...")
     host.run_cmd(f"cd $HOME/data; {build_vars} python3 setup.py bdist_wheel")
-    wheel_name = complete_wheel(
-        host, "data", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/data/build/lib"
-    )
+    wheel_name = complete_wheel(host, "data")
     return wheel_name
 
 
@@ -398,9 +392,7 @@ def build_xla(host: remote, version: str = "master") -> str:
 
     print("Building TorchXLA wheel...")
     host.run_cmd(f"cd $HOME/xla; {build_vars} python3 setup.py bdist_wheel")
-    wheel_name = complete_wheel(
-        host, "data", "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/xla/build/lib"
-    )
+    wheel_name = complete_wheel(host, "xla")
     return wheel_name
 
 
