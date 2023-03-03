@@ -33,6 +33,27 @@ CUDA_CUDNN_MAPPING = {
     "12.0": "8.8.0.121-1+cuda12.0",
 }
 
+AWS_TELEMETRY = """
+################################################################################
+# AWS Container Telemetry
+################################################################################
+try:
+    if os.path.exists("/usr/local/bin/deep_learning_container.py") and (os.getenv('OPT_OUT_TRACKING') is None or
+                                                                        os.getenv('OPT_OUT_TRACKING')
+                                                                        not in ["True", "TRUE", "true"]):
+        import subprocess
+        import threading
+        dlc_container_type = os.getenv("DLC_CONTAINER_TYPE", "inference")
+        cmd = f"python /usr/local/bin/deep_learning_container.py --framework pytorch --container-type {dlc_container_type} " \
+            "--framework-version " + __version__ + " &>/dev/null"
+        # creating a daemon thread, so that main thread can complete without stalling.
+        x = threading.Thread(target=lambda: os.system(cmd))
+        x.setDaemon(True)
+        x.start()
+except Exception:
+    pass
+"""
+
 # Global dynamic variables
 # these get populated from the arguments and are used throughout the script
 # These are not in caps as they are not static, like the mappings above.
@@ -396,6 +417,16 @@ def build_xla(host: remote, version: str = "master") -> str:
     return wheel_name
 
 
+def inject_telemetry(host: remote) -> None:
+    print("Injecting AWS Telemetry code to Pytorch")
+    from tempfile import NamedTemporaryFile
+    with NamedTemporaryFile() as tmp:
+        tmp.write(AWS_TELEMETRY.encode('utf-8'))
+        tmp.flush()
+        host.upload_file(tmp.name, 'aws_telemetry.py')
+    host.run_cmd(f"cat aws_telemetry.py >> $HOME/pytorch/torch/__init__.py")
+
+
 def complete_wheel(host: remote, folder: str, env_str: str = ""):
     platform = "manylinux_2_31_aarch64" if is_arm64 else "manylinux_2_31_x86_64"
     wheel_name = host.list_dir(f"$HOME/{folder}/dist")[0]
@@ -463,9 +494,11 @@ def build_torch(host: remote):
             ## Patches End ##
             print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
+            inject_telemetry(host)
             host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
         else:
             print("build pytorch without mkldnn backend")
+            inject_telemetry(host)
             host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
     else:
         if enable_cuda:
@@ -475,6 +508,7 @@ def build_torch(host: remote):
         else:
             print("Begining x86_64 PyTorch wheel build process...")
         print(f"Building with the following variables: {build_vars}")
+        inject_telemetry(host)
         host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
 
     host.run_cmd(
