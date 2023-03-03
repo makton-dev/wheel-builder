@@ -427,13 +427,13 @@ def inject_telemetry(host: remote) -> None:
     host.run_cmd(f"cat aws_telemetry.py >> $HOME/pytorch/torch/__init__.py")
 
 
-def complete_wheel(host: remote, folder: str, env_str: str = ""):
+def complete_wheel(host: remote, folder: str):
     platform = "manylinux_2_31_aarch64" if is_arm64 else "manylinux_2_31_x86_64"
     wheel_name = host.list_dir(f"$HOME/{folder}/dist")[0]
     if "pytorch" in folder:
         print(f"Repairing {wheel_name} with auditwheel")
         host.run_cmd(
-            f"cd $HOME/{folder}; {env_str} auditwheel repair --plat {platform}  dist/{wheel_name}"
+            f"cd $HOME/{folder}; auditwheel repair --plat {platform}  dist/{wheel_name}"
         )
         repaired_wheel_name = host.list_dir(f"$HOME/{folder}/wheelhouse")[0]
         print(f"moving {repaired_wheel_name} wheel to {folder}/dist..")
