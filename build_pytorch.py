@@ -613,14 +613,16 @@ if __name__ == "__main__":
     audio_wheel_name = build_torchaudio(host, TORCH_VERSION_MAPPING[pytorch_version][1])
     text_wheel_name = build_torchtext(host, TORCH_VERSION_MAPPING[pytorch_version][2])
     data_wheel_name = build_torchdata(host, TORCH_VERSION_MAPPING[pytorch_version][3])
-    if is_arm64:
-        xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[pytorch_version][4])
+    # Disabled till we figure out what is needed to properly build XLA
+    # if is_arm64:
+    #     xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[pytorch_version][4])
 
     print(f"Wheels built:\n{torch_wheel_name}")
     if not args.torch_only:
         print(f"{vision_wheel_name}\n" f"{audio_wheel_name}\n" f"{text_wheel_name}")
-    if is_arm64:
-        print(f"{data_wheel_name}")
+    # Disable till we figure out what is needed to properly build XLA
+    # if is_arm64:
+    #     print(f"{data_wheel_name}")
 
     print(f"Terminating instance and cleaning up")
     ec2.cleanup(instance, sg_id)
