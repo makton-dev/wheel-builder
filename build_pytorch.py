@@ -396,7 +396,7 @@ def build_xla(host: remote, version: str = "master") -> str:
     host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc")
     print("Checking out TorchXLA repo")
     if version == ["main", "nightly"]:
-        host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME/pytorch; git clone {url} -b {version} {git_clone_flags}")
         build_version = host.check_output(
             ["if [ -f data/version.txt ]; then cat data/version.txt; fi"]
         ).strip()
@@ -408,12 +408,12 @@ def build_xla(host: remote, version: str = "master") -> str:
         )
         build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor}  "
     else:
-        host.run_cmd(f"cd $HOME; git clone {url} -b v{version} {git_clone_flags}")
+        host.run_cmd(f"cd $HOME/pytorch; git clone {url} -b v{version} {git_clone_flags}")
         build_vars += f"BUILD_VERSION={version}+{processor} "
 
     print("Building TorchXLA wheel...")
-    host.run_cmd(f"cd $HOME/xla; {build_vars} python3 setup.py bdist_wheel")
-    wheel_name = complete_wheel(host, "xla")
+    host.run_cmd(f"cd $HOME/pytorch/xla; {build_vars} python3 setup.py bdist_wheel")
+    wheel_name = complete_wheel(host, "pytorch/xla")
     return wheel_name
 
 
