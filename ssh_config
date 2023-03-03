@@ -1,0 +1,4 @@
+# Need to set keepalive for auditwheel in the docker
+Host *
+   TcpKeepAlive yes
+   ServerAliveInterval 50

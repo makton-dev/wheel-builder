@@ -6,7 +6,8 @@ env:
 phases:
   install:
     commands:
-      pip install awscli boto3
+      - pip install awscli boto3
+      - cat ssh_config >> ~/.ssh/config
   
   build:
     commands:
