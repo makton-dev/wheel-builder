@@ -1,3 +1,7 @@
+'''
+Somethin being worked on to get versions from the community repos instead
+of using the map file.
+'''
 import github3
 
 gh = github3.GitHub()
