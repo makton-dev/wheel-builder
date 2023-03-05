@@ -71,8 +71,9 @@ class RemoteHost:
             ]
         )
 
-    def start_docker(self, image: str = None, enable_cuda: bool = False) -> None:
+    def start_docker(self, image: str = None, enable_cuda: bool = False, is_test: bool = False) -> None:
         print("Installing Docker for Builds...")
+        tst_option = "-v $HOME/wheels:/wheels " if is_test else ""
         try:
             self.run_ssh_cmd("sudo apt-get install -y docker.io")
             self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
@@ -93,9 +94,9 @@ class RemoteHost:
                 )
                 self.run_ssh_cmd("sudo nvidia-ctk runtime configure --runtime=docker")
                 self.run_ssh_cmd("sudo systemctl restart docker")
-                cmd_str = f"docker run -t -d --gpus all -w /root {image}"
+                cmd_str = f"docker run -t -d --gpus all {tst_option} -w /root {image}"
             else:
-                cmd_str = f"docker run -t -d -w /root {image}"
+                cmd_str = f"docker run -t -d -w {tst_option} /root {image}"
 
             self.run_ssh_cmd(f"docker pull {image}")
             self.container_id = self.check_ssh_output(cmd_str).strip()

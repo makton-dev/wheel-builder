@@ -1,0 +1,3 @@
+HOST *
+  TcpKeepAlive yes
+  ServerAliveInterval 50
