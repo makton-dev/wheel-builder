@@ -230,8 +230,8 @@ def install_ArmComputeLibrary(host: remote) -> None:
     host.run_cmd(
         f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v{ARMCL_VERSION} --depth 1 --shallow-submodules; "
         f"pushd ComputeLibrary; "
-        f"git fetch https://review.mlplatform.org/ml/ComputeLibrary && git cherry-pick --no-commit d2475c721e; "
-        f"git fetch https://review.mlplatform.org/ml/ComputeLibrary refs/changes/68/9068/4 && git cherry-pick --no-commit FETCH_HEAD; "
+        # f"git fetch https://review.mlplatform.org/ml/ComputeLibrary && git cherry-pick --no-commit d2475c721e; "
+        # f"git fetch https://review.mlplatform.org/ml/ComputeLibrary refs/changes/68/9068/4 && git cherry-pick --no-commit FETCH_HEAD; "
         f"export acl_install_dir=$HOME/acl; "
         f"scons Werror=1 -j8 debug=0 neon=1 opencl=0 os=linux openmp=1 cppthreads=0 arch=armv8.2-a multi_isa=1 build=native build_dir=$acl_install_dir/build; "
         f"cp -r arm_compute $acl_install_dir; "
@@ -483,14 +483,14 @@ def build_torch(host: remote):
         if enable_mkldnn:
             print("Patch codebase for ACL optimizations")
             ## patches ##
-            host.run_cmd(
-                f"cd $HOME; git clone https://github.com/snadampal/builder.git; cd builder; "
-                f"git checkout pt2.0_cherrypick; "
-                f"cd $HOME/pytorch; "
-                f"patch -p1 < $HOME/builder/patches/pytorch_addmm_91763.patch; "
-                f"patch -p1 < $HOME/builder/patches/pytorch_matmul_heuristic.patch; "
-                f"patch -p1 < $HOME/builder/patches/pytorch_c10_thp_93888.patch"
-            )
+            # host.run_cmd(
+            #     f"cd $HOME; git clone https://github.com/snadampal/builder.git; cd builder; "
+            #     f"git checkout pt2.0_cherrypick; "
+            #     f"cd $HOME/pytorch; "
+            #     f"patch -p1 < $HOME/builder/patches/pytorch_addmm_91763.patch; "
+            #     f"patch -p1 < $HOME/builder/patches/pytorch_matmul_heuristic.patch; "
+            #     f"patch -p1 < $HOME/builder/patches/pytorch_c10_thp_93888.patch"
+            # )
             ## Patches End ##
             print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
