@@ -154,7 +154,7 @@ def get_processor_type():
 
 def install_conda(host: remote):
     arch = "aarch64" if is_arm64 else "x86_64"
-    conda_pkgs = "numpy pyyaml ninja scons auditwheel patchelf make cmake "
+    conda_pkgs = "numpy==1.22.2 pyyaml ninja scons auditwheel patchelf make cmake "
     host.run_cmd(
         f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
         "bash -f ~/miniforge.sh -b; "
