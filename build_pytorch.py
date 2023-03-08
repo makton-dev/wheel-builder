@@ -9,15 +9,6 @@ OPEN_MPI_VERSION = "4.1.5"
 ARMCL_VERSION = "22.11"
 WHEEL_DIR = "wheels"
 
-PYTHON_VERSION: str = None
-PYTORCH_VERSION: str = None
-IS_ARM64: bool = False
-ENABLE_MKLDNN: bool = False
-ENABLE_CUDA: bool = False
-CUDA_VERSION: str = None
-TORCH_ONLY: bool = False
-KEEP_ON_FAILURE: bool = False
-
 TORCH_VERSION_MAPPING = {
     # Torch: ( TorchVision, TorchAudio, TorchText, TorchData, TorchXLA )
     "master": ("main", "main", "main", "main", "master"),
@@ -63,6 +54,15 @@ except Exception:
     pass
 """
 
+python_version: str
+pytorch_version: str
+is_arm64: bool
+enable_mkldnn: bool
+enable_cuda: bool
+cuda_version: str
+torch_only: bool
+keep_on_failure: bool
+
 
 def prep_host(host: remote):
     print("Preparing host for building thru Docker")
@@ -77,7 +77,7 @@ def prep_host(host: remote):
             "while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done"
         )
         host.run_cmd("sudo apt-get update")
-        if ENABLE_CUDA:
+        if enable_cuda:
             # Running update twice for an intermit dependency bug from apt-get
             host.run_cmd(
                 f"sudo apt-get update; "
@@ -104,7 +104,7 @@ def configure_docker(host: remote):
 
     print("Configure docker container...")
     host.run_cmd("apt-get update; DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
-    if IS_ARM64:
+    if is_arm64:
         os_pkgs += "gcc-10 g++-10 libc6-dev "
         host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
         host.run_cmd(
@@ -113,8 +113,8 @@ def configure_docker(host: remote):
         )
     else:
         os_pkgs += "build-essential "
-        if ENABLE_CUDA:
-            cuda_mm = CUDA_VERSION.split(".")[0] + "-" + CUDA_VERSION.split(".")[1]
+        if enable_cuda:
+            cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
             cudnn_ver = get_cudnn8_ver()
             if not cudnn_ver:
                 print("Unable to match Cuda version with Cudnn version.. Exiting..")
@@ -126,11 +126,11 @@ def configure_docker(host: remote):
 
     install_conda(host)
     install_OpenMPI(host)
-    if ENABLE_CUDA:
+    if enable_cuda:
         install_nccl(host)
-    if IS_ARM64:
+    if is_arm64:
         install_OpenBLAS(host)
-    if ENABLE_MKLDNN:
+    if enable_mkldnn:
         install_ArmComputeLibrary(host)
     print("Docker container ready to build")
 
@@ -140,20 +140,20 @@ def get_cudnn8_ver():
     Get Cudnn version based on CUDA version.
     """
     for prefix in CUDA_CUDNN_MAPPING:
-        if not CUDA_VERSION.startswith(prefix):
+        if not cuda_version.startswith(prefix):
             continue
         return CUDA_CUDNN_MAPPING[prefix]
 
 
 def get_processor_type():
-    if ENABLE_CUDA:
-        return "cu" + CUDA_VERSION.split(".")[0] + CUDA_VERSION.split(".")[1]
+    if enable_cuda:
+        return "cu" + cuda_version.split(".")[0] + cuda_version.split(".")[1]
     else:
         return "cpu"
 
 
 def install_conda(host: remote):
-    arch = "aarch64" if IS_ARM64 else "x86_64"
+    arch = "aarch64" if is_arm64 else "x86_64"
     conda_pkgs = "numpy pyyaml ninja scons auditwheel patchelf make cmake "
     host.run_cmd(
         f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
@@ -161,16 +161,16 @@ def install_conda(host: remote):
         "rm -f ~/miniforge.sh; "
         "echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc"
     )
-    if not IS_ARM64:
+    if not is_arm64:
         conda_pkgs += "mkl mkl-include "
-        if ENABLE_CUDA:
-            cuda_mm = CUDA_VERSION.split(".")[0] + "-" + CUDA_VERSION.split(".")[1]
+        if enable_cuda:
+            cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
             conda_pkgs += f"magma-cuda{cuda_mm.replace('-','')} "
             host.run_cmd(
                 "conda config --add channels pytorch; "
                 "echo 'export LD_LIBRARY_PATH=$HOME/miniforge3/pkgs/mkl-*/lib:$LD_LIBRARY_PATH'  >> ~/.bashrc"
             )
-    host.run_cmd(f"conda install -y python={PYTHON_VERSION} {conda_pkgs}")
+    host.run_cmd(f"conda install -y python={python_version} {conda_pkgs}")
 
 
 def install_OpenBLAS(host: remote) -> None:
@@ -281,7 +281,7 @@ def build_torchvision(host: remote, version: str = "master") -> str:
 
 
 def build_torchaudio(host: remote, version: str = "master") -> str:
-    arch = "aarch64" if IS_ARM64 else "x86_64"
+    arch = "aarch64" if is_arm64 else "x86_64"
     processor = get_processor_type()
     url = "https://github.com/pytorch/audio"
     git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
@@ -311,14 +311,14 @@ def build_torchaudio(host: remote, version: str = "master") -> str:
 
     # torchaudio has it's library in a strange place. symlinking to a easier location
     host.run_cmd(
-        f"ln -s $HOME/audio/build/lib.linux-{arch}-cpython-{PYTHON_VERSION.replace('.','')}/torchaudio/lib $HOME/audio/build/lib"
+        f"ln -s $HOME/audio/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchaudio/lib $HOME/audio/build/lib"
     )
     wheel_name = complete_wheel(host, "audio")
     return wheel_name
 
 
 def build_torchtext(host: remote, version: str = "master") -> str:
-    arch = "aarch64" if IS_ARM64 else "x86_64"
+    arch = "aarch64" if is_arm64 else "x86_64"
     processor = get_processor_type()
     url = "https://github.com/pytorch/text"
     git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
@@ -346,7 +346,7 @@ def build_torchtext(host: remote, version: str = "master") -> str:
 
     # torchtext has it's library in a strange place. symlinking to a easier location
     host.run_cmd(
-        f"ln -s $HOME/text/build/lib.linux-{arch}-cpython-{PYTHON_VERSION.replace('.','')}/torchtext/lib $HOME/text/build/lib"
+        f"ln -s $HOME/text/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchtext/lib $HOME/text/build/lib"
     )
     wheel_name = complete_wheel(host, "text")
     return wheel_name
@@ -357,8 +357,8 @@ def build_torchdata(host: remote, version: str = "master") -> str:
     url = "https://github.com/pytorch/data"
     git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
     build_vars = (
-        f"BUILD_S3=1 PYTHON_VERSION={PYTHON_VERSION} "
-        f"PYTORCH_VERSION={PYTORCH_VERSION.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
+        f"BUILD_S3=1 python_version={python_version} "
+        f"pytorch_version={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     )
 
     print("Checking out TorchData repo")
@@ -389,8 +389,8 @@ def build_xla(host: remote, version: str = "master") -> str:
     url = "https://github.com/pytorch/xla"
     git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
     build_vars = (
-        f"PYTHON_VERSION={PYTHON_VERSION} "
-        f"PYTORCH_VERSION={PYTORCH_VERSION.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
+        f"python_version={python_version} "
+        f"pytorch_version={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     )
     host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc")
     print("Checking out TorchXLA repo")
@@ -432,7 +432,7 @@ def inject_telemetry(host: remote) -> None:
 
 
 def complete_wheel(host: remote, folder: str):
-    platform = "manylinux_2_31_aarch64" if IS_ARM64 else "manylinux_2_31_x86_64"
+    platform = "manylinux_2_31_aarch64" if is_arm64 else "manylinux_2_31_x86_64"
     wheel_name = host.list_dir(f"$HOME/{folder}/dist")[0]
     if "pytorch" in folder:
         print(f"Repairing {wheel_name} with auditwheel")
@@ -463,8 +463,8 @@ def build_torch(host: remote):
 
     print("Checking out PyTorch repo")
     # Version to branch logic
-    if PYTORCH_VERSION == "master" or args.pytorch_version == "nightly":
-        branch = PYTORCH_VERSION
+    if pytorch_version == "master" or args.pytorch_version == "nightly":
+        branch = pytorch_version
         host.run_cmd(f"cd $HOME; git clone {git_url} -b {branch} {git_flags}")
         build_date = (
             host.check_output("cd pytorch ; git log --pretty=format:%s -1")
@@ -475,16 +475,16 @@ def build_torch(host: remote):
         version = host.check_output("cat pytorch/version.txt").strip()[:-2]
         build_vars += f"PYTORCH_BUILD_VERSION={version}.dev{build_date}+{processor} "
     else:
-        branch = "v" + PYTORCH_VERSION
+        branch = "v" + pytorch_version
         host.run_cmd(f"cd $HOME; git clone {git_url} -b {branch} {git_flags}")
-        build_vars += f"PYTORCH_BUILD_VERSION={PYTORCH_VERSION}+{processor} "
+        build_vars += f"PYTORCH_BUILD_VERSION={pytorch_version}+{processor} "
 
     print("Install pytorch python dependent packages")
     host.run_cmd("pip install -r pytorch/requirements.txt")
 
-    if IS_ARM64:
+    if is_arm64:
         print("Begining arm64 PyTorch wheel build process...")
-        if ENABLE_MKLDNN:
+        if enable_mkldnn:
             print("Patch codebase for ACL optimizations")
             ## patches ##
             host.run_cmd(
@@ -505,9 +505,9 @@ def build_torch(host: remote):
             inject_telemetry(host)
             host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
     else:
-        if ENABLE_CUDA:
+        if enable_cuda:
             print(
-                f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {CUDA_VERSION}..."
+                f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {cuda_version}..."
             )
         else:
             print("Begining x86_64 PyTorch wheel build process...")
@@ -525,10 +525,10 @@ def build_torch(host: remote):
 
 
 def select_docker_image():
-    if IS_ARM64:
+    if is_arm64:
         return "arm64v8/ubuntu:20.04"
-    elif ENABLE_CUDA:
-        return f"nvidia/cuda:{CUDA_VERSION}-base-ubuntu20.04"
+    elif enable_cuda:
+        return f"nvidia/cuda:{cuda_version}-base-ubuntu20.04"
     else:
         return "ubuntu:20.04"
 
@@ -541,77 +541,77 @@ def parse_arguments():
 
     parser = ArgumentParser("Builid PyTorch Wheels")
     parser.add_argument(
-        "--python-version", type=str, default=os.environ.get("PYTHON_VERSION")
+        "--python-version", type=str, default=os.environ.get("python_version")
     )
     parser.add_argument(
-        "--pytorch-version", type=str, default=os.environ.get("PYTORCH_VERSION")
+        "--pytorch-version", type=str, default=os.environ.get("pytorch_version")
     )
     parser.add_argument(
-        "--is-arm64", action="store_true", default=os.environ.get("IS_ARM64")
+        "--is-arm64", action="store_true", default=os.environ.get("is_arm64")
     )
     parser.add_argument(
-        "--enable-mkldnn", action="store_true", default=os.environ.get("ENABLE_MKLDNN")
+        "--enable-mkldnn", action="store_true", default=os.environ.get("enable_mkldnn")
     )
     parser.add_argument(
-        "--enable-cuda", action="store_true", default=os.environ.get("ENABLE_CUDA")
+        "--enable-cuda", action="store_true", default=os.environ.get("enable_cuda")
     )
     parser.add_argument(
-        "--cuda-version", type=str, default=os.environ.get("CUDA_VERSION")
+        "--cuda-version", type=str, default=os.environ.get("cuda_version")
     )
     parser.add_argument("--torch-only", action="store_true")
     parser.add_argument("--keep-on-failure", action="store_true")
     args = parser.parse_args()
 
-    PYTHON_VERSION = args.python_version
-    PYTORCH_VERSION = args.pytorch_version
-    IS_ARM64 = args.is_arm64
-    ENABLE_MKLDNN = args.enable_mkldnn
-    ENABLE_CUDA = args.enable_cuda
-    CUDA_VERSION = args.cuda_version
-    TORCH_ONLY = args.torch_only
-    KEEP_ON_FAILURE = args.keep_on_failure
-
-    if PYTHON_VERSION is None:
+    if args.python_version is None:
         print("Python version not supplied...")
         parser.print_help()
         exit(1)
-    if PYTORCH_VERSION is None:
+    if args.pytorch_version is None:
         print("No PyTorch version selected...\nAvailable Versions:")
         for version in TORCH_VERSION_MAPPING:
             print(version)
         parser.print_help()
         exit(1)
-    if PYTORCH_VERSION not in TORCH_VERSION_MAPPING:
+    if args.pytorch_version not in TORCH_VERSION_MAPPING:
         print("Invalid PyTorch version selected...\nAvailable Versions:")
         parser.print_help()
         exit(1)
-    if ENABLE_CUDA and CUDA_VERSION is None:
+    if args.enable_cuda and args.cuda_version is None:
         print("CUDA selected but no CUDA version supplied. Exiting...")
         parser.print_help()
         exit(1)
-    if IS_ARM64:
+    if args.is_arm64:
         print("Arm64 Build slected. Ignoring any Cuda options...")
-        ENABLE_CUDA = False
-        CUDA_VERSION = None
-    if not args.is_arm64 and ENABLE_MKLDNN:
+        args.enable_cuda = False
+        args.cuda_version = None
+    if not args.is_arm64 and args.enable_mkldnn:
         print("MKLDNN option is not available for x86_64. Ignoring...")
-        ENABLE_MKLDNN = False
+        args.enable_mkldnn = False
 
     return args
 
 
 if __name__ == "__main__":
     args = parse_arguments()
+    python_version = args.python_version
+    pytorch_version = args.pytorch_version
+    is_arm64 = args.is_arm64
+    enable_mkldnn = args.enable_mkldnn
+    enable_cuda = args.enable_cuda
+    cuda_version = args.cuda_version
+    torch_only = args.torch_only
+    keep_on_failure = args.keep_on_failure
+
     local_key = ec2.KEY_PATH + ec2.KEY_NAME
 
-    instance_name = f"BUILD-PyTorch_{PYTORCH_VERSION}_{PYTHON_VERSION}"
+    instance_name = f"BUILD-PyTorch_{pytorch_version}_{python_version}"
     image = select_docker_image()
 
     print("create/verify local directory for wheels.")
     if not os.path.exists(WHEEL_DIR):
         os.mkdir(WHEEL_DIR)
 
-    instance, sg_id = ec2.start_instance(IS_ARM64, ENABLE_CUDA, instance_name)
+    instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
     addr = instance.public_dns_name
 
     print("Waiting for host connection...")
@@ -619,24 +619,24 @@ if __name__ == "__main__":
     host = remote.RemoteHost(addr=addr, keyfile_path=ec2.KEY_PATH)
     host.instance = instance
     host.sg_id = sg_id
-    host.keep_instance = args.keep_instance_on_failure
+    host.keep_instance = keep_on_failure
     host.wheel_dir = WHEEL_DIR
 
     prep_host(host)
-    host.start_docker(image, ENABLE_CUDA)
+    host.start_docker(image, enable_cuda)
     configure_docker(host)
 
     # build the wheels
     torch_wheel_name = build_torch(host)
     vision_wheel_name = build_torchvision(
-        host, TORCH_VERSION_MAPPING[PYTORCH_VERSION][0]
+        host, TORCH_VERSION_MAPPING[pytorch_version][0]
     )
-    audio_wheel_name = build_torchaudio(host, TORCH_VERSION_MAPPING[PYTORCH_VERSION][1])
-    text_wheel_name = build_torchtext(host, TORCH_VERSION_MAPPING[PYTORCH_VERSION][2])
-    data_wheel_name = build_torchdata(host, TORCH_VERSION_MAPPING[PYTORCH_VERSION][3])
+    audio_wheel_name = build_torchaudio(host, TORCH_VERSION_MAPPING[pytorch_version][1])
+    text_wheel_name = build_torchtext(host, TORCH_VERSION_MAPPING[pytorch_version][2])
+    data_wheel_name = build_torchdata(host, TORCH_VERSION_MAPPING[pytorch_version][3])
     # Disabled till we figure out what is needed to properly build XLA
     # if is_arm64:
-    #     xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[PYTORCH_VERSION][4])
+    #     xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[pytorch_version][4])
 
     print(f"Wheels built:\n{torch_wheel_name}")
     if not args.torch_only:
