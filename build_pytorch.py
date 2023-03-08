@@ -601,8 +601,9 @@ if __name__ == "__main__":
     cuda_version = args.cuda_version
     torch_only = args.torch_only
     keep_on_failure = args.keep_on_failure
-
     local_key = ec2.KEY_PATH + ec2.KEY_NAME
+
+    os.system("cp ssh_config ~/.ssh/")
 
     instance_name = f"BUILD-PyTorch_{pytorch_version}_{python_version}"
     image = select_docker_image()
