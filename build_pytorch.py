@@ -541,22 +541,22 @@ def parse_arguments():
 
     parser = ArgumentParser("Builid PyTorch Wheels")
     parser.add_argument(
-        "--python-version", type=str, default=os.environ.get("python_version")
+        "--python-version", type=str, default=os.environ.get("PYTHON_VERSION")
     )
     parser.add_argument(
-        "--pytorch-version", type=str, default=os.environ.get("pytorch_version")
+        "--pytorch-version", type=str, default=os.environ.get("PYTORCH_VERSION")
     )
     parser.add_argument(
-        "--is-arm64", action="store_true", default=os.environ.get("is_arm64")
+        "--is-arm64", action="store_true", default=os.environ.get("IS_ARM64")
     )
     parser.add_argument(
-        "--enable-mkldnn", action="store_true", default=os.environ.get("enable_mkldnn")
+        "--enable-mkldnn", action="store_true", default=os.environ.get("ENABLE_MKLDNN")
     )
     parser.add_argument(
-        "--enable-cuda", action="store_true", default=os.environ.get("enable_cuda")
+        "--enable-cuda", action="store_true", default=os.environ.get("ENABLE_CUDA")
     )
     parser.add_argument(
-        "--cuda-version", type=str, default=os.environ.get("cuda_version")
+        "--cuda-version", type=str, default=os.environ.get("CUDA_VERSION")
     )
     parser.add_argument("--torch-only", action="store_true")
     parser.add_argument("--keep-on-failure", action="store_true")
