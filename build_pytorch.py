@@ -560,7 +560,7 @@ def parse_arguments():
     )
     parser.add_argument("--torch-only", action="store_true")
     parser.add_argument("--keep-on-failure", action="store_true")
-    args.parse_args()
+    args = parser.parse_args()
 
     PYTHON_VERSION = args.python_version
     PYTORCH_VERSION = args.pytorch_version
