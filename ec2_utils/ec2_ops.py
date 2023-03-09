@@ -110,7 +110,6 @@ def instance_data(arm=False, cuda=False):
     """
     if arm:
         return ARM_AMI, "t4g.2xlarge"
-
     if cuda:
         return X86_AMI, "p3.2xlarge"
     else:

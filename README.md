@@ -1,9 +1,35 @@
 # Deep Learning Framework Wheel Builder
 ## Description
-This repo handles the compiling of various Deep Learning Framework libraries, creating the wheels (binaries), for use in Docker Container or local install. This can be executed locally or thru a CI job.
+This tool handles the compiling of various Deep Learning Framework libraries, creating the python "pip" wheels (binaries), for use in a Docker container or local install. This can be executed locally or thru a CI job.
 
 ## Requirements
-
+* Python 3.9 or above
+     * awscli
+     * boto3
+* aws credentials with the following rights:
+     * ec2:CreateKeyPair
+     * ec2:CreateTags
+     * ec2:DescribeImages
+     * ec2:DescribeInstances
+     * ec2:DescribeVpcEndpointServices
+     * ec2:DescribeAvailabilityZones
+     * ec2:DescribeVpcs
+     * ec2:DeleteKeyPair
+     * ec2:DeleteNetworkInterface
+     * ec2:DeleteSubnet
+     * ec2:DescribeInstanceStatus
+     * ec2:DescribeKeyPairs
+     * ec2:DescribeRouteTables
+     * ec2:RunInstances
+     * ec2:TerminateInstances
+     * ec2:ModifyInstanceMetadataOptions
+     * ec2:CreateSecurityGroup
+     * ec2:DeleteSecurityGroup
+     * ec2:DescribeSecurityGroups
+     * ec2:AuthorizeSecurityGroupIngress
+     * ec2:AuthorizeSecurityGroupEgress
+     * ec2:RevokeSecurityGroupEgress
+     * ec2:RevokeSecurityGroupIngress
 
 ## Process
 1. Spins up an EC2 instance of the supported build 
@@ -28,7 +54,6 @@ The Planned frameworks are the following:
 The first framework this supports is: __PyTorch__
 
 ## Usage "PyTorch"
-
 ``` 
 pytorch/build_pytorch.py --pytorch-version x.x.x(-xxx) --python-version x.x 
 ```
@@ -36,14 +61,16 @@ pytorch/build_pytorch.py --pytorch-version x.x.x(-xxx) --python-version x.x
 
 | arg | Description | Note |
 |-----|-------------|------|
-| --python-version | set python version x.x (3.9) | See table below |
+| --python-version | set python version | this will set conda with the requested python version for the build |
 | --pytorch-version | set to supported pytorch version | See table below |
 | --is-arm64 | add to build arm64 wheels | |
 | --enable-mkldnn | add to enable mkldnn for arm64 wheels | |
 | --enable-cuda | add to build x86_64 wheels with nVidia Cuda Toolkit | ignored when --is-arm64 is set |
 | --cuda-version | set nVidia CUDA Toolkit version x.x.x (11.6.0) | required when cuda enabled |
-| --keep-instance-on-failure | add to keep instance running after a failure.  | Used to troubleshoot the build process |
+| --keep-on-failure | add to keep instance running after a failure.  | Used to troubleshoot the build process |
 | --torch-only | will build torch wheel only | used mainly for updates to torch only |
+
+Arguments can be used as ENV variabes (ie. --python-version = PYTHON_VERSION). However, --keep-on-failure and --torch-only do not have ENV variables as they should only be used when running locally.
 
 ### Supported PyTorch versions
 When building supported PyTorch version, this will also build the supporting apps (TorchVision, TorchAudio, TorchText, Torchdata)
@@ -55,14 +82,3 @@ When building supported PyTorch version, this will also build the supporting app
 | 2.0.0-rc2 | 0.15.0-rc2 | 2.0.0-rc2 | 0.15.0-rc2 | 0.6.0-rc2 |
 | 1.13.1 | 0.14.1 | 0.13.1 | 0.14.1 | 0.5.1 |
 | 1.12.1 | 0.13.1 | 0.12.1 | 0.13.1 | 0.4.1 |
-| 1.11.0 | 0.12.1 | 0.11.0 | 0.12.0 | 0.3.0 |
-
-### Supported Python Version
-
-| Python |
-|--------|
-| 3.7    |
-| 3.8    |
-| 3.9    |
-| 3.10   |
-| 3.11   |

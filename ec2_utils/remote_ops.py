@@ -26,6 +26,10 @@ class RemoteHost:
             "ssh",
             "-o",
             "StrictHostKeyChecking=no",
+            "-o",
+            "TCPKeepAlive=yes",
+            "-o",
+            "ServerAliveInterval=30",
             "-i",
             self.keyfile_path,
             f"{self.login_name}@{self.addr}",
@@ -48,8 +52,6 @@ class RemoteHost:
         subprocess.check_call(
             [
                 "scp",
-                "-o TCPKeepAlive=yes",
-                "-o ServerAliveInterval=30",
                 "-i",
                 self.keyfile_path,
                 local_file,

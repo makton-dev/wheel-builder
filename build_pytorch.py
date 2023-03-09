@@ -16,7 +16,6 @@ TORCH_VERSION_MAPPING = {
     "2.0.0-rc2": ("0.15.0-rc2", "2.0.0-rc2", "0.15.0-rc2", "0.6.0-rc2", "1.13.0"),
     "1.13.1": ("0.14.1", "0.13.1", "0.14.1", "0.5.1", "1.13.0"),
     "1.12.1": ("0.13.1", "0.12.1", "0.13.1", "0.4.1", "1.12.0"),
-    "1.11.0": ("0.12.1", "0.11.0", "0.12.0", "0.3.0", "1.10.0"),
 }
 
 # Mapping can be built from the nvidia repo:
@@ -64,26 +63,36 @@ torch_only: bool
 keep_on_failure: bool
 
 
-def prep_host(host: remote):
+def prep_host(host: remote, addr: str):
     print("Preparing host for building thru Docker")
     time.sleep(5)
     try:
-        host.run_cmd("sudo systemctl stop apt-daily.service || true")
-        host.run_cmd("sudo systemctl stop unattended-upgrades.service || true")
+        host.run_cmd(
+            "sudo systemctl disable --now apt-daily.service || true; "
+            "sudo systemctl disable --now unattended-upgrades.service || true; "
+            "sudo systemctl disable --now apt-daily.timer || true; "
+            "sudo systemctl disable --now apt-daily-upgrade.timer || true; "
+            )
         host.run_cmd(
             "while systemctl is-active --quiet apt-daily.service; do sleep 1; done"
         )
         host.run_cmd(
             "while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done"
         )
-        host.run_cmd("sudo apt-get update")
+        host.run_cmd("sudo apt-get update; "
+                     "DEBIAN_FRONTEND=noninteractive sudo apt-get -y upgrade; ")
         if enable_cuda:
             # Running update twice for an intermit dependency bug from apt-get
             host.run_cmd(
-                f"sudo apt-get update; "
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get -y install nvidia-driver-{NVIDIA_DRIVER_VERSION}"
             )
             host.run_cmd("sudo nvidia-smi")
+        
+        host.run_cmd("sudo shutdown -r +1 'reboot for updates'")
+        print("Waiting for system to reboot")
+        time.sleep(90)
+        print("Waiting for re-connection...")
+        remote.wait_for_connection(addr, 22)
     except Exception as x:
         print("Failed to prepare host..")
         print(x)
@@ -621,7 +630,7 @@ if __name__ == "__main__":
     host.keep_instance = keep_on_failure
     host.wheel_dir = WHEEL_DIR
 
-    prep_host(host)
+    prep_host(host,addr)
     host.start_docker(image, enable_cuda)
     configure_docker(host)
 
