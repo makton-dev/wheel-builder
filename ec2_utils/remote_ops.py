@@ -48,6 +48,8 @@ class RemoteHost:
         subprocess.check_call(
             [
                 "scp",
+                "-o TCPKeepAlive=yes",
+                "-o ServerAliveInterval=30",
                 "-i",
                 self.keyfile_path,
                 local_file,

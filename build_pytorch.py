@@ -603,8 +603,6 @@ if __name__ == "__main__":
     keep_on_failure = args.keep_on_failure
     local_key = ec2.KEY_PATH + ec2.KEY_NAME
 
-    os.system("cp ssh_config ~/.ssh/")
-
     instance_name = f"BUILD-PyTorch_{pytorch_version}_{python_version}"
     image = select_docker_image()
 
@@ -613,7 +611,7 @@ if __name__ == "__main__":
         os.mkdir(WHEEL_DIR)
 
     instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
-    addr = instance.public_dns_name
+    addr = instance.public_ip_address
 
     print("Waiting for host connection...")
     remote.wait_for_connection(addr, 22)
