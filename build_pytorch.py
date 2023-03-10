@@ -84,6 +84,7 @@ def prep_host(host: remote, addr: str):
         if enable_cuda:
             # Running update twice for an intermit dependency bug from apt-get
             host.run_cmd(
+                f"sudo apt-get update; "
                 f"sudo DEBIAN_FRONTEND=noninteractive apt-get -y install nvidia-driver-{NVIDIA_DRIVER_VERSION}"
             )
             host.run_cmd("sudo nvidia-smi")
