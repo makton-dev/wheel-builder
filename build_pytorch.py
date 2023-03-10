@@ -519,6 +519,7 @@ def build_torch(host: remote):
             print(
                 f"Begining x86_64 PyTorch wheel build process with CUDA Toolkit version {cuda_version}..."
             )
+            build_vars += "TORCH_CUDA_ARCH_LIST='3.7 5.0 7.0+PTX 7.5+PTX 8.0' "
         else:
             print("Begining x86_64 PyTorch wheel build process...")
         print(f"Building with the following variables: {build_vars}")
