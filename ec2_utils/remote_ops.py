@@ -78,10 +78,12 @@ class RemoteHost:
     def start_docker(self, image: str = None, enable_cuda: bool = False) -> None:
         print("Installing Docker for Builds...")
         try:
-            self.run_ssh_cmd("sudo apt-get install -y docker.io")
-            self.run_ssh_cmd(f"sudo usermod -a -G docker {self.login_name}")
-            self.run_ssh_cmd("sudo service docker start")
-
+            # installing docker.io, but insuring no daemon.json as it seems the package is 
+            # installing it ang setting the bridge to none, breaking container networking.
+            self.run_ssh_cmd("sudo apt-get install -y docker.io; "
+                             "sudo rm /etc/docker/daemon.json; "
+                             f"sudo usermod -a -G docker {self.login_name}; "
+                             "sudo systemctl restart docker")
             if enable_cuda:
                 print("Configuring Docker for nVidia GPU usage..")
                 self.run_ssh_cmd(
@@ -97,9 +99,9 @@ class RemoteHost:
                 )
                 self.run_ssh_cmd("sudo nvidia-ctk runtime configure --runtime=docker")
                 self.run_ssh_cmd("sudo systemctl restart docker")
-                cmd_str = f"docker run -t -d --gpus all -w /root {image}"
+                cmd_str = f"docker run -td --gpus all -w /root {image}"
             else:
-                cmd_str = f"docker run -t -d -w /root {image}"
+                cmd_str = f"docker run -td -w /root {image}"
 
             self.run_ssh_cmd(f"docker pull {image}")
             self.container_id = self.check_ssh_output(cmd_str).strip()

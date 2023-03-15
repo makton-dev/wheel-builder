@@ -13,7 +13,7 @@ TORCH_VERSION_MAPPING = {
     # Torch: ( TorchVision, TorchAudio, TorchText, TorchData, TorchXLA )
     "master": ("main", "main", "main", "main", "master"),
     "nightly": ("nightly", "nightly", "nightly", "nightly", "master"),
-    "2.0.0-rc2": ("0.15.0-rc2", "2.0.0-rc2", "0.15.0-rc2", "0.6.0-rc2", "1.13.0"),
+    "2.0.0": ("0.15.1", "2.0.1", "0.15.1", "0.6.0", "1.13.0"),
     "1.13.1": ("0.14.1", "0.13.1", "0.14.1", "0.5.1", "1.13.0"),
     "1.12.1": ("0.13.1", "0.12.1", "0.13.1", "0.4.1", "1.12.0"),
 }
@@ -70,8 +70,6 @@ def prep_host(host: remote, addr: str):
         host.run_cmd(
             "sudo systemctl disable --now apt-daily.service || true; "
             "sudo systemctl disable --now unattended-upgrades.service || true; "
-            "sudo systemctl disable --now apt-daily.timer || true; "
-            "sudo systemctl disable --now apt-daily-upgrade.timer || true; "
             )
         host.run_cmd(
             "while systemctl is-active --quiet apt-daily.service; do sleep 1; done"
@@ -113,7 +111,9 @@ def configure_docker(host: remote):
     os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config "
 
     print("Configure docker container...")
-    host.run_cmd("apt-get update; DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
+    time.sleep(10)
+    host.run_cmd("apt-get update;"
+                 "DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
     if is_arm64:
         os_pkgs += "gcc-10 g++-10 libc6-dev "
         host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
