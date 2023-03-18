@@ -14,7 +14,7 @@ class RemoteHost:
     sg_id: str = None
     instance = None
     keep_instance: bool = False
-    wheel_dir: str = None
+    local_dir: str = None
 
     def __init__(self, addr: str, keyfile_path: str, login_name: str = "ubuntu"):
         self.addr = addr
@@ -62,7 +62,7 @@ class RemoteHost:
     def scp_download_file(
         self, remote_file: str, local_file: Optional[str] = None
     ) -> None:
-        rel_path = self.wheel_dir + "/" if self.wheel_dir else ""
+        rel_path = self.local_dir + "/" if self.local_dir else ""
         if local_file is None:
             local_file = "."
         subprocess.check_call(
@@ -78,12 +78,14 @@ class RemoteHost:
     def start_docker(self, image: str = None, enable_cuda: bool = False) -> None:
         print("Installing Docker for Builds...")
         try:
-            # installing docker.io, but insuring no daemon.json as it seems the package is 
+            # installing docker.io, but insuring no daemon.json as it seems the package is
             # installing it ang setting the bridge to none, breaking container networking.
-            self.run_ssh_cmd("sudo apt-get install -y docker.io; "
-                             "sudo rm /etc/docker/daemon.json; "
-                             f"sudo usermod -a -G docker {self.login_name}; "
-                             "sudo systemctl restart docker")
+            self.run_ssh_cmd(
+                "sudo apt-get install -y docker.io; "
+                "sudo rm /etc/docker/daemon.json; "
+                f"sudo usermod -a -G docker {self.login_name}; "
+                "sudo systemctl restart docker"
+            )
             if enable_cuda:
                 print("Configuring Docker for nVidia GPU usage..")
                 self.run_ssh_cmd(

@@ -109,11 +109,11 @@ def instance_data(arm=False, cuda=False):
          instance: string
     """
     if arm:
-        return ARM_AMI, "c6g.8xlarge"
+        return ARM_AMI
     if cuda:
-        return X86_AMI, "p3.8xlarge"
+        return X86_AMI
     else:
-        return X86_AMI, "c5.4xlarge"
+        return X86_AMI
 
 
 def ec2_instances_by_id(instance_id):
@@ -132,7 +132,7 @@ def ec2_instances_by_id(instance_id):
     return rc[0] if len(rc) > 0 else None
 
 
-def start_instance(arm=False, cuda=False, instance_name=None):
+def start_instance(arm=False, cuda=False, instance_name=None, instance_type=None):
     """
     Start EC2 instance
     params:
@@ -143,12 +143,12 @@ def start_instance(arm=False, cuda=False, instance_name=None):
          running instance ID
     """
     create_ssh_key_pair()
-    ami_id, instance = instance_data(arm, cuda)
+    ami_id = instance_data(arm, cuda)
     sg_id = create_sg()
 
     inst = current_resource.create_instances(
         ImageId=ami_id,
-        InstanceType=instance,
+        InstanceType=instance_type,
         SecurityGroups=[SG_NAME],
         KeyName=KEY_NAME,
         MinCount=1,

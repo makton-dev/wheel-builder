@@ -1,36 +1,7 @@
-import time
 import os
 from ec2_utils import ec2_ops as ec2, remote_ops as remote
-
-OPENBLAS_VERSION = "0.3.21"
-NVIDIA_DRIVER_VERSION = "470"
-NCCL_VERSION = "2.16.5"
-OPEN_MPI_VERSION = "4.1.5"
-ARMCL_VERSION = "22.11"
-WHEEL_DIR = "wheels"
-
-TORCH_VERSION_MAPPING = {
-    # Torch: ( TorchVision, TorchAudio, TorchText, TorchData, TorchXLA )
-    "master": ("main", "main", "main", "main", "master"),
-    "nightly": ("nightly", "nightly", "nightly", "nightly", "master"),
-    "2.0.0": ("0.15.1", "2.0.1", "0.15.1", "0.6.0", "1.13.0"),
-    "1.13.1": ("0.14.1", "0.13.1", "0.14.1", "0.5.1", "1.13.0"),
-    "1.12.1": ("0.13.1", "0.12.1", "0.13.1", "0.4.1", "1.12.0"),
-}
-
-# Mapping can be built from the nvidia repo:
-# https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/
-# Maps the cudnn8 version to the Cuda version
-CUDA_CUDNN_MAPPING = {
-    "11.2": "8.1.1.33-1+cuda11.2",
-    "11.3": "8.2.1.32-1+cuda11.3",
-    "11.4": "8.2.4.15-1+cuda11.4",
-    "11.5": "8.3.3.40-1+cuda11.5",
-    "11.6": "8.4.1.50-1+cuda11.6",
-    "11.7": "8.5.0.96-1+cuda11.7",
-    "11.8": "8.8.0.121-1+cuda11.8",
-    "12.0": "8.8.0.121-1+cuda12.0",
-}
+from common import build_env
+import config as conf
 
 python_version: str
 pytorch_version: str
@@ -42,200 +13,11 @@ torch_only: bool
 keep_on_failure: bool
 
 
-def prep_host(host: remote, addr: str):
-    print("Preparing host for building thru Docker")
-    time.sleep(5)
-    try:
-        host.run_cmd(
-            "sudo systemctl disable --now apt-daily.service || true; "
-            "sudo systemctl disable --now unattended-upgrades.service || true; "
-            )
-        host.run_cmd(
-            "while systemctl is-active --quiet apt-daily.service; do sleep 1; done"
-        )
-        host.run_cmd(
-            "while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done"
-        )
-        host.run_cmd("sudo apt-get update; "
-                     "DEBIAN_FRONTEND=noninteractive sudo apt-get -y upgrade; ")
-        if enable_cuda:
-            # Running update twice for an intermit dependency bug from apt-get
-            host.run_cmd(
-                f"sudo apt-get update; "
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get -y install nvidia-driver-{NVIDIA_DRIVER_VERSION}"
-            )
-            host.run_cmd("sudo nvidia-smi")
-        
-        host.run_cmd("sudo shutdown -r +1 'reboot for updates'")
-        print("Waiting for system to reboot")
-        time.sleep(90)
-        print("Waiting for re-connection...")
-        remote.wait_for_connection(addr, 22)
-    except Exception as x:
-        print("Failed to prepare host..")
-        print(x)
-        if host.keep_instance:
-            exit(1)
-        ec2.cleanup(host.instance, host.sg_id)
-        exit(1)
-    time.sleep(3)
-    print("Host prep complete")
-
-
-def configure_docker(host: remote):
-    """
-    Configures Docker container for building wheels.
-    x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
-    """
-    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config "
-
-    print("Configure docker container...")
-    time.sleep(10)
-    host.run_cmd("apt-get update;"
-                 "DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
-    if is_arm64:
-        os_pkgs += "gcc-10 g++-10 libc6-dev "
-        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
-        host.run_cmd(
-            "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
-            "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100"
-        )
-    else:
-        os_pkgs += "build-essential "
-        if enable_cuda:
-            cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
-            cudnn_ver = get_cudnn8_ver()
-            if not cudnn_ver:
-                print("Unable to match Cuda version with Cudnn version.. Exiting..")
-                ec2.cleanup(host.instance, host.sg_id)
-                exit(1)
-            host.run_cmd("echo 'export USE_CUDA=1' >> ~/.bashrc")
-            os_pkgs += f"cuda-toolkit-{cuda_mm} libcudnn8={cudnn_ver} libcudnn8-dev={cudnn_ver} "
-        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
-
-    install_conda(host)
-    install_OpenMPI(host)
-    if enable_cuda:
-        install_nccl(host)
-    if is_arm64:
-        install_OpenBLAS(host)
-    if enable_mkldnn:
-        install_ArmComputeLibrary(host)
-    print("Docker container ready to build")
-
-
-def get_cudnn8_ver():
-    """
-    Get Cudnn version based on CUDA version.
-    """
-    for prefix in CUDA_CUDNN_MAPPING:
-        if not cuda_version.startswith(prefix):
-            continue
-        return CUDA_CUDNN_MAPPING[prefix]
-
-
-def get_processor_type():
+def get_processor_type(enable_cuda: bool, cuda_version: str):
     if enable_cuda:
         return "cu" + cuda_version.split(".")[0] + cuda_version.split(".")[1]
     else:
         return "cpu"
-
-
-def install_conda(host: remote):
-    arch = "aarch64" if is_arm64 else "x86_64"
-    conda_pkgs = "numpy==1.22.2 pyyaml ninja scons auditwheel patchelf make cmake "
-    host.run_cmd(
-        f"curl -L -o ~/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-{arch}.sh; "
-        "bash -f ~/miniforge.sh -b; "
-        "rm -f ~/miniforge.sh; "
-        "echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc"
-    )
-    if not is_arm64:
-        conda_pkgs += "mkl mkl-include "
-        if enable_cuda:
-            cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
-            conda_pkgs += f"magma-cuda{cuda_mm.replace('-','')} "
-            host.run_cmd(
-                "conda config --add channels pytorch; "
-                "echo 'export LD_LIBRARY_PATH=$HOME/miniforge3/pkgs/mkl-*/lib:$LD_LIBRARY_PATH'  >> ~/.bashrc"
-            )
-    host.run_cmd(f"conda install -y python={python_version} {conda_pkgs}")
-
-
-def install_OpenBLAS(host: remote) -> None:
-    """
-    Currently used with arm64 builds
-    """
-    print("Building OpenBLAS for ARM64")
-    host.run_cmd(
-        f"git clone https://github.com/xianyi/OpenBLAS -b v{OPENBLAS_VERSION} --depth 1 --shallow-submodules"
-    )
-    make_flags = "NUM_THREADS=64 USE_OPENMP=1 NO_SHARED=1 DYNAMIC_ARCH=1 TARGET=ARMV8"
-    host.run_cmd(
-        f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS; "
-        "echo 'export LD_LIBRARY_PATH=/opt/OpenBLAS/lib/:$LD_LIBRARY_PATH' >> ~/.bashrc"
-    )
-
-    print("OpenBlas built")
-
-
-def install_OpenMPI(host: remote):
-    """
-    Install Open-MPI libraries for adding to Wheel builds
-    """
-    host.run_cmd(
-        f"wget https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-{OPEN_MPI_VERSION}.tar.gz; "
-        f"gunzip -c openmpi-{OPEN_MPI_VERSION}.tar.gz | tar xf -; "
-        f"cd openmpi-{OPEN_MPI_VERSION}; "
-        f"./configure --prefix=/home/.openmpi; "
-        f"make all install; "
-        f"cd ..; rm openmpi-{OPEN_MPI_VERSION}.tar.gz; "
-        f"rm -rf openmpi-{OPEN_MPI_VERSION}; "
-        "echo 'PATH=/home/.openmpi/bin:$PATH' >> ~/.bashrc"
-        "echo 'export LD_LIBRARY_PATH=/home/.openmpi/lib:$LD_LIBRARY_PATH' >> ~/.bashrc"
-    )
-
-
-def install_nccl(host: remote):
-    """
-    Install Nvidia CCL for CUDA
-    """
-    host.run_cmd(
-        "cd $HOME; "
-        f"git clone https://github.com/NVIDIA/nccl.git -b v{NCCL_VERSION}-1; "
-        "pushd nccl; "
-        "make -j64 src.build BUILDDIR=/usr/local; "
-        "popd && rm -rf nccl"
-    )
-
-
-def install_ArmComputeLibrary(host: remote) -> None:
-    """
-    It's in the name. Used for arm64 builds
-    """
-    print("Build and install ARM Compute Library")
-    host.run_cmd("mkdir $HOME/acl")
-    host.run_cmd(
-        f"git clone https://github.com/ARM-software/ComputeLibrary.git -b v{ARMCL_VERSION} --depth 1 --shallow-submodules")
-    # Graviton CPU specific patches that did not make PT 2.0. PRs ARM repo awaiting merge.
-    if pytorch_version == "2.0.0":
-        print("Patching PT 2.0.0 ACL for Optimizations")
-        host.run_cmd("cd $HOME; "
-                     "git clone https://github.com/snadampal/builder -b pt2.0_cherrypick; "
-                     "bash $HOME/builder/aarch64_linux/apply_acl_patches.sh")
-    host.run_cmd(
-        f"cd $HOME/ComputeLibrary; "
-        f"export acl_install_dir=$HOME/acl; "
-        f"scons Werror=1 -j8 debug=0 neon=1 opencl=0 os=linux openmp=1 cppthreads=0 arch=armv8.2-a multi_isa=1 build=native build_dir=$acl_install_dir/build; "
-        f"cp -r arm_compute $acl_install_dir; "
-        f"cp -r include $acl_install_dir; "
-        f"cp -r utils $acl_install_dir; "
-        f"cp -r support $acl_install_dir; "
-        f"popd; "
-        "echo 'export LD_LIBRARY_PATH=$HOME/acl/build:$LD_LIBRARY_PATH' >> ~/.bashrc; "
-        "echo 'export ACL_ROOT_DIR=$HOME/ComputeLibrary:$HOME/acl' >> ~/.bashrc"
-    )
-    print("ARM Compute Library Installed")
 
 
 def build_torchvision(host: remote, version: str = "master") -> str:
@@ -414,17 +196,6 @@ def build_xla(host: remote, version: str = "master") -> str:
     return wheel_name
 
 
-def inject_telemetry(host: remote) -> None:
-    print("Injecting AWS Telemetry code to Pytorch")
-    from tempfile import NamedTemporaryFile
-
-    with NamedTemporaryFile() as tmp:
-        tmp.write(AWS_TELEMETRY.encode("utf-8"))
-        tmp.flush()
-        host.upload_file(tmp.name, "aws_telemetry.py")
-    host.run_cmd(f"cat aws_telemetry.py >> $HOME/pytorch/torch/__init__.py")
-
-
 def complete_wheel(host: remote, folder: str):
     platform = "manylinux_2_31_aarch64" if is_arm64 else "manylinux_2_31_x86_64"
     wheel_name = host.list_dir(f"$HOME/{folder}/dist")[0]
@@ -484,7 +255,9 @@ def build_torch(host: remote):
             # repo is already on the filesystem
             if pytorch_version == "2.0.0":
                 print("Patch codebase for PT 2.0 ACL optimizations")
-                host.run_cmd("bash $HOME/builder/aarch64_linux/apply_pytorch_patches.sh")
+                host.run_cmd(
+                    "bash $HOME/builder/aarch64_linux/apply_pytorch_patches.sh"
+                )
             ## Patches End ##
             print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
@@ -510,15 +283,6 @@ def build_torch(host: remote):
     print("Installing PyTorch wheel")
     host.run_cmd(f"pip3 install $HOME/pytorch/dist/{torch_wheel_name}")
     return torch_wheel_name
-
-
-def select_docker_image():
-    if is_arm64:
-        return "arm64v8/ubuntu:20.04"
-    elif enable_cuda:
-        return f"nvidia/cuda:{cuda_version}-base-ubuntu20.04"
-    else:
-        return "ubuntu:20.04"
 
 
 def parse_arguments():
@@ -556,11 +320,11 @@ def parse_arguments():
         exit(1)
     if args.pytorch_version is None:
         print("No PyTorch version selected...\nAvailable Versions:")
-        for version in TORCH_VERSION_MAPPING:
+        for version in conf.TORCH_VERSION_MAPPING:
             print(version)
         parser.print_help()
         exit(1)
-    if args.pytorch_version not in TORCH_VERSION_MAPPING:
+    if args.pytorch_version not in conf.TORCH_VERSION_MAPPING:
         print("Invalid PyTorch version selected...\nAvailable Versions:")
         parser.print_help()
         exit(1)
@@ -589,38 +353,35 @@ if __name__ == "__main__":
     cuda_version = args.cuda_version
     torch_only = args.torch_only
     keep_on_failure = args.keep_on_failure
-    local_key = ec2.KEY_PATH + ec2.KEY_NAME
-
-    instance_name = f"BUILD-PyTorch_{pytorch_version}_{python_version}"
-    image = select_docker_image()
 
     print("create/verify local directory for wheels.")
-    if not os.path.exists(WHEEL_DIR):
-        os.mkdir(WHEEL_DIR)
+    if not os.path.exists(conf.WHEEL_DIR):
+        os.mkdir(conf.WHEEL_DIR)
 
-    instance, sg_id = ec2.start_instance(is_arm64, enable_cuda, instance_name)
-    addr = instance.public_ip_address
-
-    print("Waiting for host connection...")
-    remote.wait_for_connection(addr, 22)
-    host = remote.RemoteHost(addr=addr, keyfile_path=ec2.KEY_PATH)
-    host.instance = instance
-    host.sg_id = sg_id
-    host.keep_instance = keep_on_failure
-    host.wheel_dir = WHEEL_DIR
-
-    prep_host(host,addr)
-    host.start_docker(image, enable_cuda)
-    configure_docker(host)
+    host = build_env(
+        pytorch_version=pytorch_version,
+        python_version=python_version,
+        is_arm64=is_arm64,
+        enable_cuda=enable_cuda,
+        cuda_version=cuda_version,
+        enable_mkldnn=enable_mkldnn,
+        keep_on_failure=keep_on_failure,
+    )
 
     # build the wheels
     torch_wheel_name = build_torch(host)
     vision_wheel_name = build_torchvision(
-        host, TORCH_VERSION_MAPPING[pytorch_version][0]
+        host, conf.TORCH_VERSION_MAPPING[pytorch_version][0]
     )
-    audio_wheel_name = build_torchaudio(host, TORCH_VERSION_MAPPING[pytorch_version][1])
-    text_wheel_name = build_torchtext(host, TORCH_VERSION_MAPPING[pytorch_version][2])
-    data_wheel_name = build_torchdata(host, TORCH_VERSION_MAPPING[pytorch_version][3])
+    audio_wheel_name = build_torchaudio(
+        host, conf.TORCH_VERSION_MAPPING[pytorch_version][1]
+    )
+    text_wheel_name = build_torchtext(
+        host, conf.TORCH_VERSION_MAPPING[pytorch_version][2]
+    )
+    data_wheel_name = build_torchdata(
+        host, conf.TORCH_VERSION_MAPPING[pytorch_version][3]
+    )
     # Disabled till we figure out what is needed to properly build XLA
     # if is_arm64:
     #     xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[pytorch_version][4])
@@ -633,4 +394,4 @@ if __name__ == "__main__":
     #     print(f"{data_wheel_name}")
 
     print(f"Terminating instance and cleaning up")
-    ec2.cleanup(instance, sg_id)
+    ec2.cleanup(host.instance, host.sg_id)
