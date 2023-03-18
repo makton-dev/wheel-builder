@@ -109,11 +109,11 @@ def instance_data(arm=False, cuda=False):
          instance: string
     """
     if arm:
-        return ARM_AMI, "t4g.2xlarge"
+        return ARM_AMI, "c6g.8xlarge"
     if cuda:
-        return X86_AMI, "p3.2xlarge"
+        return X86_AMI, "p3.8xlarge"
     else:
-        return X86_AMI, "c5.2xlarge"
+        return X86_AMI, "c5.4xlarge"
 
 
 def ec2_instances_by_id(instance_id):
