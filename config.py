@@ -44,7 +44,7 @@ BUILD_INSTANCE_TYPES = {
 }
 
 TEST_INSTANCE_TYPES = {
-    "graviton": "c6g.8xlarge",
+    "arm64": "c6g.8xlarge",
     "cpu": "c5.4xlarge",
-    "gpu": "p3.8xlarge",
+    "gpu": "g3.8xlarge",
 }

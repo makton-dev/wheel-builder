@@ -13,7 +13,7 @@ torch_only: bool
 keep_on_failure: bool
 
 
-def get_processor_type(enable_cuda: bool, cuda_version: str):
+def get_processor_type():
     if enable_cuda:
         return "cu" + cuda_version.split(".")[0] + cuda_version.split(".")[1]
     else:
@@ -84,11 +84,6 @@ def build_torchaudio(host: remote, version: str = "master") -> str:
 
     print("Building TorchAudio wheel")
     host.run_cmd(f"cd $HOME/audio; {build_vars} python3 setup.py bdist_wheel")
-
-    # torchaudio has it's library in a strange place. symlinking to a easier location
-    host.run_cmd(
-        f"ln -s $HOME/audio/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchaudio/lib $HOME/audio/build/lib"
-    )
     wheel_name = complete_wheel(host, "audio")
     return wheel_name
 
@@ -119,11 +114,6 @@ def build_torchtext(host: remote, version: str = "master") -> str:
 
     print("Building TorchText wheel")
     host.run_cmd(f"cd $HOME/text; {build_vars} python3 setup.py bdist_wheel")
-
-    # torchtext has it's library in a strange place. symlinking to a easier location
-    host.run_cmd(
-        f"ln -s $HOME/text/build/lib.linux-{arch}-cpython-{python_version.replace('.','')}/torchtext/lib $HOME/text/build/lib"
-    )
     wheel_name = complete_wheel(host, "text")
     return wheel_name
 
@@ -261,10 +251,9 @@ def build_torch(host: remote):
             ## Patches End ##
             print("Building pytorch with mkldnn+acl backend")
             build_vars += "USE_MKLDNN=ON USE_MKLDNN_ACL=ON "
-            host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
         else:
             print("build pytorch without mkldnn backend")
-            host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
+        host.run_cmd(f"cd $HOME/pytorch; {build_vars} python3 setup.py bdist_wheel")
     else:
         if enable_cuda:
             print(

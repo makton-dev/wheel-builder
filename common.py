@@ -67,7 +67,6 @@ def install_OpenBLAS(host: remote) -> None:
         f"pushd OpenBLAS; make {make_flags} -j8; make {make_flags} install; popd; rm -rf OpenBLAS; "
         "echo 'export LD_LIBRARY_PATH=/opt/OpenBLAS/lib/:$LD_LIBRARY_PATH' >> ~/.bashrc"
     )
-
     print("OpenBlas built")
 
 
@@ -134,43 +133,28 @@ def install_ArmComputeLibrary(host: remote, pytorch_version: str) -> None:
 
 
 def prep_host(host: remote, addr: str, enable_cuda: bool):
-    print("Preparing host for building thru Docker")
+    print("Preparing host for Docker usage...")
     time.sleep(5)
-    try:
+    host.run_cmd(
+        "sudo systemctl disable --now apt-daily.service || true; "
+        "sudo systemctl disable --now unattended-upgrades.service || true; "
+        "while systemctl is-active --quiet apt-daily.service; do sleep 1; done; "
+        "while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done; "
+        "sudo apt-get update; "
+        "DEBIAN_FRONTEND=noninteractive sudo apt-get -y upgrade"
+    )
+    if enable_cuda:
+        # Running update twice for an intermit dependency bug from apt-get
         host.run_cmd(
-            "sudo systemctl disable --now apt-daily.service || true; "
-            "sudo systemctl disable --now unattended-upgrades.service || true; "
+            f"sudo apt-get update; "
+            f"sudo DEBIAN_FRONTEND=noninteractive apt-get -y install nvidia-driver-{conf.NVIDIA_DRIVER_VERSION}"
         )
-        host.run_cmd(
-            "while systemctl is-active --quiet apt-daily.service; do sleep 1; done"
-        )
-        host.run_cmd(
-            "while systemctl is-active --quiet unattended-upgrades.service; do sleep 1; done"
-        )
-        host.run_cmd(
-            "sudo apt-get update; "
-            "DEBIAN_FRONTEND=noninteractive sudo apt-get -y upgrade; "
-        )
-        if enable_cuda:
-            # Running update twice for an intermit dependency bug from apt-get
-            host.run_cmd(
-                f"sudo apt-get update; "
-                f"sudo DEBIAN_FRONTEND=noninteractive apt-get -y install nvidia-driver-{conf.NVIDIA_DRIVER_VERSION}"
-            )
-            host.run_cmd("sudo nvidia-smi")
 
-        host.run_cmd("sudo shutdown -r +1 'reboot for updates'")
-        print("Waiting for system to reboot")
-        time.sleep(90)
-        print("Waiting for re-connection...")
-        remote.wait_for_connection(addr, 22)
-    except Exception as x:
-        print("Failed to prepare host..")
-        print(x)
-        if host.keep_instance:
-            exit(1)
-        ec2.cleanup(host.instance, host.sg_id)
-        exit(1)
+    host.run_cmd("sudo shutdown -r +1 'reboot for updates'")
+    print("Waiting for system to reboot")
+    time.sleep(90)
+    print("Waiting for re-connection...")
+    remote.wait_for_connection(addr, 22)
     print("Host prep complete")
 
 
@@ -188,15 +172,14 @@ def configure_docker(
     Configures Docker container for building wheels.
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     """
-    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config "
+    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config libgl1 "
 
     print("Configure docker container...")
     time.sleep(10)
     host.run_cmd("apt-get update;" "DEBIAN_FRONTEND=noninteractive apt-get -y upgrade")
     if is_arm64:
         os_pkgs += "gcc-10 g++-10 libc6-dev "
-        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
-        host.run_cmd(
+        host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}; "
             "update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 100 --slave /usr/bin/g++ g++ /usr/bin/g++-10 --slave /usr/bin/gcov gcov /usr/bin/gcov-10; "
             "update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++ 100"
         )
@@ -222,7 +205,7 @@ def configure_docker(
             install_OpenBLAS(host)
         if enable_mkldnn:
             install_ArmComputeLibrary(host, pytorch_version)
-    print("Docker container ready to build")
+    print("Docker container ready...")
 
 
 def build_env(
@@ -238,8 +221,8 @@ def build_env(
     # Setup instance details
     instance_name_prepend = "TEST" if is_test else "BUILD"
     instance_name_build_num = getenv("CODEBUILD_BUILD_NUMBER")
-    instance_name = f"{instance_name_prepend}_PyTorch_{pytorch_version}_{python_version}_{instance_name_build_num}"
-    instance_type, docker_iamge = select_host_data(
+    instance_name = f"{instance_name_prepend}_PyTorch_{pytorch_version}_py{python_version}_{instance_name_build_num}"
+    instance_type, docker_image = select_host_data(
         is_arm64, enable_cuda, cuda_version, is_test
     )
     instance, sg_id = ec2.start_instance(
@@ -256,7 +239,7 @@ def build_env(
     host.local_dir = conf.REPORTS_DIR if is_test else conf.WHEEL_DIR
 
     prep_host(host, addr, enable_cuda)
-    host.start_docker(docker_iamge, enable_cuda)
+    host.start_docker(docker_image, enable_cuda)
     configure_docker(
         host=host,
         pytorch_version=pytorch_version,

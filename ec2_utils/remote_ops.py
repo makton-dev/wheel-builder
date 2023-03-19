@@ -41,7 +41,15 @@ class RemoteHost:
         return args.split() if isinstance(args, str) else args
 
     def run_ssh_cmd(self, args: Union[str, List[str]]) -> None:
-        subprocess.check_call(self._gen_ssh_prefix() + self._split_cmd(args))
+        try:
+            subprocess.check_call(self._gen_ssh_prefix() + self._split_cmd(args))
+        except Exception as x:
+            print("SSH Host Command Failed...\n"
+                  f"error: {x}")
+            if self.keep_instance:
+                exit(1)
+            ec2_ops.cleanup(self.instance, self.sg_id)
+            exit(1)  
 
     def check_ssh_output(self, args: Union[str, List[str]]) -> str:
         return subprocess.check_output(
@@ -49,15 +57,23 @@ class RemoteHost:
         ).decode("utf-8")
 
     def scp_upload_file(self, local_file: str, remote_file: str) -> None:
-        subprocess.check_call(
-            [
-                "scp",
-                "-i",
-                self.keyfile_path,
-                local_file,
-                f"{self.login_name}@{self.addr}:{remote_file}",
-            ]
-        )
+        try:
+            subprocess.check_call(
+                [
+                    "scp",
+                    "-i",
+                    self.keyfile_path,
+                    local_file,
+                    f"{self.login_name}@{self.addr}:{remote_file}",
+                ]
+            )
+        except Exception as x:
+            print("Upload Failed...\n"
+                  f"error: {x}")
+            if self.keep_instance:
+                exit(1)
+            ec2_ops.cleanup(self.instance, self.sg_id)
+            exit(1)     
 
     def scp_download_file(
         self, remote_file: str, local_file: Optional[str] = None
@@ -65,18 +81,26 @@ class RemoteHost:
         rel_path = self.local_dir + "/" if self.local_dir else ""
         if local_file is None:
             local_file = "."
-        subprocess.check_call(
-            [
-                "scp",
-                "-i",
-                self.keyfile_path,
-                f"{self.login_name}@{self.addr}:{remote_file}",
-                rel_path + local_file,
-            ]
-        )
+        try:
+            subprocess.check_call(
+                [
+                    "scp",
+                    "-i",
+                    self.keyfile_path,
+                    f"{self.login_name}@{self.addr}:{remote_file}",
+                    rel_path + local_file,
+                ]
+            )
+        except Exception as x:
+            print("Download Failed...\n"
+                  f"error: {x}")
+            if self.keep_instance:
+                exit(1)
+            ec2_ops.cleanup(self.instance, self.sg_id)
+            exit(1)       
 
     def start_docker(self, image: str = None, enable_cuda: bool = False) -> None:
-        print("Installing Docker for Builds...")
+        print("Installing Docker...")
         try:
             # installing docker.io, but insuring no daemon.json as it seems the package is
             # installing it ang setting the bridge to none, breaking container networking.
@@ -116,7 +140,7 @@ class RemoteHost:
     def using_docker(self) -> bool:
         return self.container_id is not None
 
-    def run_cmd(self, args: Union[str, List[str]]) -> None:
+    def run_cmd(self, args: Union[str, List[str]], allow_error: bool = False) -> None:
         if not self.using_docker():
             return self.run_ssh_cmd(args)
         assert self.container_id is not None
@@ -138,6 +162,8 @@ class RemoteHost:
             if rc != 0:
                 raise subprocess.CalledProcessError(rc, docker_cmd)
         except subprocess.CalledProcessError as x:
+            if allow_error:
+                return
             print("Command Execution Failed...")
             print(docker_cmd)
             if self.keep_instance:

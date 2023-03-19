@@ -174,13 +174,16 @@ def start_instance(arm=False, cuda=False, instance_name=None, instance_type=None
     return running_inst, sg_id
 
 
-def cleanup(instance=None, sg_id=None):
+def cleanup(instance: str, sg_id: str, keep: bool = False):
     """
     Terminates instance, deletes security group and ssh key from AWS
     params:
 
     """
-
+    if keep:
+        print("keeping instance on request...")
+        return
+    
     if instance:
         print(f"Terminating instance with ID {instance.id}")
         instance.terminate()
