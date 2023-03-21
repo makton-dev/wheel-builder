@@ -10,7 +10,7 @@ TORCH_VERSION_MAPPING = {
     # Torch: ( TorchVision, TorchAudio, TorchText, TorchData, TorchXLA )
     "master": ("main", "main", "main", "main", "master"),
     "nightly": ("nightly", "nightly", "nightly", "nightly", "master"),
-    "2.0.0": ("0.15.1", "2.0.1", "0.15.1", "0.6.0", "1.13.0"),
+    "2.0.0": ("0.15.1", "2.0.1", "0.15.1", "0.6.0", "2.0.0"),
     "1.13.1": ("0.14.1", "0.13.1", "0.14.1", "0.5.1", "1.13.0"),
     "1.12.1": ("0.13.1", "0.12.1", "0.13.1", "0.4.1", "1.12.0"),
 }
@@ -46,5 +46,5 @@ BUILD_INSTANCE_TYPES = {
 TEST_INSTANCE_TYPES = {
     "arm64": "c6g.8xlarge",
     "cpu": "c5.4xlarge",
-    "gpu": "g3.8xlarge",
+    "gpu": "p3.8xlarge",
 }

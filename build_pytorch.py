@@ -158,7 +158,8 @@ def build_xla(host: remote, version: str = "master") -> str:
         f"python_version={python_version} "
         f"pytorch_version={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     )
-    host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc")
+    host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc; "
+                 "conda -y install bazel")
     print("Checking out TorchXLA repo")
     if version == ["main", "nightly"]:
         host.run_cmd(
@@ -372,15 +373,15 @@ if __name__ == "__main__":
         host, conf.TORCH_VERSION_MAPPING[pytorch_version][3]
     )
     # Disabled till we figure out what is needed to properly build XLA
-    # if is_arm64:
-    #     xla_wheel_name = build_xla(host, TORCH_VERSION_MAPPING[pytorch_version][4])
+    if is_arm64:
+        xla_wheel_name = build_xla(host, conf.TORCH_VERSION_MAPPING[pytorch_version][4])
 
     print(f"Wheels built:\n{torch_wheel_name}")
     if not args.torch_only:
         print(f"{vision_wheel_name}\n" f"{audio_wheel_name}\n" f"{text_wheel_name}")
     # Disable till we figure out what is needed to properly build XLA
-    # if is_arm64:
-    #     print(f"{data_wheel_name}")
+    if is_arm64:
+        print(f"{data_wheel_name}")
 
     print(f"Terminating instance and cleaning up")
     ec2.cleanup(host.instance, host.sg_id)

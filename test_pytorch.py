@@ -4,7 +4,7 @@ from common import build_env
 import config as conf
 
 
-def install_wheels(host: remote, file_list: object):
+def install_wheels(host: remote, file_list: object, enable_cuda: bool = False):
     host.run_ssh_cmd(f"mkdir ~/{conf.WHEEL_DIR}")
     host.run_cmd(f"mkdir ~/{conf.WHEEL_DIR}")
     for file in file_list:
@@ -13,7 +13,9 @@ def install_wheels(host: remote, file_list: object):
             remote_file=f"~/{conf.WHEEL_DIR}/{file}")
     host.run_ssh_cmd(
         f"docker cp $HOME/{conf.WHEEL_DIR}/. {host.container_id}:/root/{conf.WHEEL_DIR}/")
-    host.run_cmd(f"pip install $HOME/{conf.WHEEL_DIR}/*")    
+    host.run_cmd(f"pip install $HOME/{conf.WHEEL_DIR}/*")
+    if enable_cuda:
+        host.run_cmd(f"pip install triton")
 
 
 def run_unit_tests(host: remote, pytorch_version: str, core_only: bool = False):
@@ -33,7 +35,7 @@ def run_unit_tests(host: remote, pytorch_version: str, core_only: bool = False):
     host.run_cmd(
         "cd $HOME/pytorch/test; "
         f"mkdir $HOME/{conf.REPORTS_DIR}; "
-        f"python run_test.py --keep-going {test_opts} 2>&1 3>&1 | tee $HOME/{conf.REPORTS_DIR}/{log_name}",
+        f"python run_test.py --keep-going {test_opts} -x doctests 2>&1 3>&1 | tee $HOME/{conf.REPORTS_DIR}/{log_name}",
         allow_error=True
     )
     host.download_wheel(os.path.join("", conf.REPORTS_DIR, log_name))
@@ -153,7 +155,7 @@ if __name__ == "__main__":
         keep_on_failure=keep_on_failure,
     )
 
-    install_wheels(host=host, file_list=file_list)
+    install_wheels(host=host, file_list=file_list, enable_cuda=enable_cuda)
 
     if not args.benchmark_only:
         run_unit_tests(

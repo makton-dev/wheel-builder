@@ -158,7 +158,7 @@ def start_instance(arm=False, cuda=False, instance_name=None, instance_type=None
                 "DeviceName": "/dev/sda1",
                 "Ebs": {
                     "DeleteOnTermination": True,
-                    "VolumeSize": 50,
+                    "VolumeSize": 100,
                     "VolumeType": "standard",
                 },
             }

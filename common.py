@@ -11,7 +11,7 @@ def select_host_data(is_arm: bool, enable_cuda: bool, cuda_version: str, is_test
     if enable_cuda:
         return (
             instace_types["gpu"],
-            f"nvidia/cuda:{conf.CUDA_MAP[cuda_version]}-base-ubuntu20.04",
+            f"nvidia/cuda:{cuda_version}-base-ubuntu20.04",
         )
     else:
         return instace_types["cpu"], "ubuntu:20.04"
@@ -172,7 +172,7 @@ def configure_docker(
     Configures Docker container for building wheels.
     x86_64 uses the default gcc-9 but arm64 uses gcc-10 due to OpenBLAS gcc requirement with v0.3.21 and above
     """
-    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config libgl1 "
+    os_pkgs = "libomp-dev libgomp1 ninja-build git gfortran libjpeg-dev libpng-dev unzip curl wget ccache pkg-config libgl1-mesa-glx "
 
     print("Configure docker container...")
     time.sleep(10)
@@ -197,12 +197,13 @@ def configure_docker(
         host.run_cmd(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {os_pkgs}")
 
     install_conda(host, python_version, is_arm64, enable_cuda, cuda_version)
+
+    install_OpenMPI(host)
+    if enable_cuda:
+        install_nccl(host)
+    if is_arm64:
+        install_OpenBLAS(host)
     if not is_test:
-        install_OpenMPI(host)
-        if enable_cuda:
-            install_nccl(host)
-        if is_arm64:
-            install_OpenBLAS(host)
         if enable_mkldnn:
             install_ArmComputeLibrary(host, pytorch_version)
     print("Docker container ready...")
