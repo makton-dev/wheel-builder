@@ -126,7 +126,6 @@ def build_torchdata(host: remote, version: str = "master") -> str:
         f"BUILD_S3=1 python_version={python_version} "
         f"pytorch_version={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
     )
-
     print("Checking out TorchData repo")
     if version == ["main", "nightly"]:
         host.run_cmd(f"cd $HOME; git clone {url} -b {version} {git_clone_flags}")
@@ -152,21 +151,11 @@ def build_torchdata(host: remote, version: str = "master") -> str:
 
 def build_xla(host: remote, version: str = "master") -> str:
     processor = get_processor_type()
-    url = "https://github.com/pytorch/xla"
-    git_clone_flags = "--recurse-submodules --depth 1 --shallow-submodules"
-    build_vars = (
-        f"python_version={python_version} "
-        f"pytorch_version={pytorch_version.replace('-','')} CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
-    )
-    host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc; "
-                 "conda -y install bazel")
-    print("Checking out TorchXLA repo")
+    build_vars = "CMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=0x10000 "
+    host.run_cmd("echo 'export XLA_CPU_USE_ACL=1' >> ~/.bashrc; ")
     if version == ["main", "nightly"]:
-        host.run_cmd(
-            f"cd $HOME/pytorch; git clone {url} -b {version} {git_clone_flags}"
-        )
         build_version = host.check_output(
-            ["if [ -f data/version.txt ]; then cat data/version.txt; fi"]
+            ["if [ -f $HOME/pytorch/xla/version.txt ]; then cat $HOME/pytorch/xla/version.txt; fi"]
         ).strip()
         build_date = (
             host.check_output("cd xla ; git log --pretty=format:%s -1")
@@ -176,15 +165,30 @@ def build_xla(host: remote, version: str = "master") -> str:
         )
         build_vars += f"BUILD_VERSION={build_version}.dev{build_date}+{processor}  "
     else:
-        host.run_cmd(
-            f"cd $HOME/pytorch; git clone {url} -b v{version} {git_clone_flags}"
-        )
         build_vars += f"BUILD_VERSION={version}+{processor} "
-
     print("Building TorchXLA wheel...")
     host.run_cmd(f"cd $HOME/pytorch/xla; {build_vars} python3 setup.py bdist_wheel")
     wheel_name = complete_wheel(host, "pytorch/xla")
     return wheel_name
+
+
+def setup_torch_for_xla(host: remote, version: str = "master") -> None:
+    processor = get_processor_type()
+    url = "https://github.com/pytorch/xla"
+    git_clone_flags = "--recurse"
+    print("Checking out TorchXLA repo into PyTorch repo...")
+    if version == ["main", "nightly"]:
+        host.run_cmd(
+            f"cd $HOME/pytorch; git clone {url} -b {version} {git_clone_flags}"
+        )
+    else:
+        host.run_cmd(
+            f"cd $HOME/pytorch; git clone {url} -b v{version} {git_clone_flags}"
+        )
+    print("Patch Pytorch Repo for XLA...")
+    host.run_cmd(
+            f"cd $HOME/pytorch; xla/scripts/apply_patches.sh"
+        )
 
 
 def complete_wheel(host: remote, folder: str):
@@ -239,6 +243,10 @@ def build_torch(host: remote):
     host.run_cmd("pip install -r pytorch/requirements.txt")
 
     if is_arm64:
+        # XLS repo needs to be cloned into pytorch repo and 
+        # some patches run to work with aarch64 Pytorch
+        setup_torch_for_xla(host=host, version=conf.TORCH_VERSION_MAPPING[pytorch_version][4])
+        
         print("Begining arm64 PyTorch wheel build process...")
         if enable_mkldnn:
             # Graviton CPU specific patches awaiting 2.0 merge.

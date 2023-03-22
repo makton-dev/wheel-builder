@@ -42,7 +42,9 @@ def install_conda(
         "rm -f ~/miniforge.sh; "
         "echo 'PATH=$HOME/miniforge3/bin:$PATH' >> ~/.bashrc"
     )
-    if not is_arm64:
+    if is_arm64:
+        conda_pkgs += "bazel "
+    else:
         conda_pkgs += "mkl mkl-include "
         if enable_cuda:
             cuda_mm = cuda_version.split(".")[0] + "-" + cuda_version.split(".")[1]
